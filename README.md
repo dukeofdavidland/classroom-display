@@ -8,6 +8,8 @@ A full-screen page for a classroom TV. It reads a Google Sheet and switches what
 
 Items on the Tasks and Cleanup panels can be checked off or added on the screen; with the write-back script installed those changes land in the sheet.
 
+**Setting up your own room?** See [SETUP.md](SETUP.md). Claude skills with placeholders are in [`skills/`](skills/).
+
 ## Files
 
 | File | What it is |
@@ -15,6 +17,8 @@ Items on the Tasks and Cleanup panels can be checked off or added on the screen;
 | `index.html` | The display page. Self-contained, no build step. |
 | `Code.gs` | Google Apps Script to paste into the sheet (Extensions → Apps Script) so screen changes write back. Setup steps are in the file header and in the sheet's *How To Use* tab. |
 | `netlify.toml` | Publishes this folder as-is; `no-cache` so the TV picks up new deploys on its next reload. |
+| `SETUP.md` | From-scratch setup guide for another room or school. |
+| `skills/` | The two Claude skills (`update-classroom-display`, `configure-classroom-display`) with `<PLACEHOLDERS>` to fill in. |
 
 ## URL options
 
