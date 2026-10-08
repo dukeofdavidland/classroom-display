@@ -132,13 +132,18 @@ function addRow(ss, p) {
   set('Show', true);
   set('Source', 'screen:' + id);
   set('Done', false);
-  sh.appendRow(row);
-  // appendRow writes as text; re-set the date and booleans as real values
-  var r = sh.getLastRow();
-  if (h['Date'] != null) sh.getRange(r, h['Date'] + 1).setValue(today());
-  if (h['Show'] != null) sh.getRange(r, h['Show'] + 1).setValue(true);
-  if (h['Done'] != null) sh.getRange(r, h['Done'] + 1).setValue(false);
+  // first row whose Task cell is empty (blank rows with unticked checkboxes still count as empty)
+  var r = firstEmptyRow(sh, h);
+  sh.getRange(r, 1, 1, row.length).setValues([row]);
   return id;
+}
+function firstEmptyRow(sh, h) {
+  var col = h['Task'] != null ? h['Task'] + 1 : 1;
+  var last = sh.getMaxRows();
+  if (last < 2) return 2;
+  var vals = sh.getRange(2, col, last - 1, 1).getValues();
+  for (var i = 0; i < vals.length; i++) if (norm(vals[i][0]) === '') return i + 2;
+  return last + 1;
 }
 
 function findRow(sh, h, p) {
