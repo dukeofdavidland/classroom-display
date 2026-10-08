@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Classroom Display</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#181b22; --panel-2:#1f232c; --line:#2a2f3a;
+    --text:#f3f4f6; --muted:#9aa3b2; --dim:#6b7280;
+    --accent:#f5a524; --good:#3ddc84; --warn:#ffb020; --bad:#ff5d5d;
+    --radius:18px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       font-size:calc(clamp(18px,1.95vw,44px) * var(--scale,1));line-height:1.25;overflow:hidden;cursor:none}
+  /* ---------- header ---------- */
+  #hdr{display:flex;align-items:center;justify-content:space-between;gap:2vw;padding:1vh 2vw;border-bottom:4px solid var(--accent);background:var(--panel)}
+  #hdr .left{min-width:0}
+  #hdr .mode{font-size:.8em;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  #hdr .title{font-size:1.9em;font-weight:800;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #hdr .sub{color:var(--muted);font-size:1em;margin-top:.2em}
+  #hdr .right{text-align:right;flex:none}
+  #clock{font-size:2.8em;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  #date{color:var(--muted);font-size:1em;margin-top:.25em}
+  #status{display:inline-block;margin-top:.3em;font-size:.55em;padding:.15em .6em;border-radius:999px;background:var(--panel-2);color:var(--muted)}
+  #status.err{background:#3a1f1f;color:#ffb3b3}
+  /* ---------- grid ---------- */
+  #grid{display:grid;grid-template-columns:1.15fr 1.05fr 1fr;gap:1.2vw;padding:1.2vw 2vw;height:calc(100vh - 0px);max-height:100vh}
+  #grid.idle{grid-template-columns:repeat(auto-fit,minmax(28vw,1fr))}
+  #grid.two{grid-template-columns:1fr 1fr}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .panel h2{margin:0;padding:.5em .8em .4em;font-size:1em;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:.5em}
+  .panel h2 .count{margin-left:auto;font-size:.75em;color:var(--muted);letter-spacing:0;text-transform:none;font-weight:500}
+  .scroll{overflow:hidden;flex:1;min-height:0;position:relative}
+  .scroll .inner{padding:.4em .8em .8em;will-change:transform}
+  .section{margin-top:.6em}
+  .section:first-child{margin-top:.2em}
+  .section h3{margin:0 0 .2em;font-size:.72em;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  ul{list-style:none;margin:0;padding:0}
+  li{display:flex;gap:.55em;align-items:flex-start;padding:.38em 0;border-bottom:1px solid var(--line);font-size:1.05em;font-weight:500}
+  li:last-child{border-bottom:0}
+  li .bullet{flex:none;width:.6em;height:.6em;border-radius:50%;background:var(--accent);margin-top:.45em}
+  li .txt{flex:1;min-width:0}
+  li .detail{display:block;color:var(--muted);font-size:.78em;margin-top:.05em;line-height:1.2}
+  /* due dates */
+  .due li{align-items:center}
+  .due .when{flex:none;text-align:center;min-width:3.9em;padding:.25em .35em;border-radius:10px;background:var(--panel-2);line-height:1.05}
+  .due .when b{display:block;font-size:.95em}
+  .due .when small{display:block;color:var(--muted);font-size:.62em;margin-top:.1em}
+  .due .soon .when{background:#3d2e08;color:var(--warn)}
+  .due .today .when{background:#3a1f1f;color:var(--bad)}
+  .due .today .when small,.due .soon .when small{color:inherit;opacity:.85}
+  .empty{color:var(--dim);padding:1.2em 1em;font-style:italic}
+  /* cleanup view */
+  #countdown{display:none;text-align:center;padding:.2vh 2vw 0;font-size:1.05em;color:var(--muted)}
+  #countdown b{color:var(--accent);font-size:1.7em;font-variant-numeric:tabular-nums;vertical-align:-.05em;margin-right:.3em}
+  #countdown.urgent b{color:var(--bad);animation:pulse 1s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.45}}
+  body.cleanup #countdown{display:block}
+  body.cleanup #grid{grid-template-columns:1.75fr 1fr;font-size:.8em;height:calc(100vh - var(--hdrH,0px) - var(--cdH,0px))}
+  .check li{padding:.2em 0;font-size:1em}
+  body.pointer{cursor:default}
+  li.todo{cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent;transition:opacity .2s}
+  li.todo .bullet{position:relative}
+  li.todo.done .bullet{background:var(--accent)}
+  li.todo.done .bullet::after{content:'';position:absolute;left:.22em;top:.02em;width:.3em;height:.55em;border:solid #0f1115;border-width:0 .18em .18em 0;transform:rotate(45deg)}
+  li.todo.done .txt{text-decoration:line-through;color:var(--muted)}
+  li.todo.done{opacity:.6}
+  .panel.all-done h2 .count{color:var(--good);font-weight:800}
+  li.todo .rm{margin-left:auto;flex:none;background:none;border:0;color:var(--dim);font:inherit;font-size:1.1em;line-height:1;padding:0 .2em;cursor:pointer;opacity:0;transition:opacity .2s}
+  body.pointer li.todo .rm,li.todo:hover .rm{opacity:1}
+  li.todo .rm:hover{color:var(--bad)}
+  .addrow{flex:none;padding:.4em .8em .5em;border-top:1px solid var(--line)}
+  .add-btn{background:transparent;border:2px dashed var(--line);color:var(--muted);font:inherit;font-size:.85em;padding:.35em .9em;border-radius:12px;cursor:pointer}
+  .add-btn:hover{border-color:var(--accent);color:var(--text)}
+  .add-input{width:100%;font:inherit;font-size:1em;padding:.4em .7em;border-radius:12px;border:2px solid var(--accent);background:var(--panel-2);color:var(--text);outline:none}
+  .add-input::placeholder{color:var(--dim)}
+  body.cleanup .section{margin-top:.4em}
+  body.cleanup .section h3{margin-bottom:.1em}
+  .check li .bullet{width:.95em;height:.95em;border-radius:5px;background:transparent;border:2px solid var(--accent);margin-top:.25em}
+  body:not(.cleanup) .check li{padding:.38em 0;font-size:1.05em}
+  .groups{display:grid;grid-template-columns:repeat(2,1fr);gap:.5em;padding-top:.2em}
+  .group{background:var(--panel-2);border:1px solid var(--line);border-left:6px solid var(--accent);border-radius:14px;padding:.45em .7em}
+  .group .gname{font-size:1.15em;font-weight:800;line-height:1.1}
+  .group .gjob{color:var(--accent);font-weight:700;margin-top:.1em;font-size:.95em;line-height:1.2}
+  .group .gmembers{color:var(--text);opacity:.9;margin-top:.3em;font-size:.95em;line-height:1.3}
+  /* idle hero */
+  #hero{display:none;text-align:center;padding:2vh 2vw .5vh}
+  #hero .big{font-size:2.6em;font-weight:900;letter-spacing:-.02em;line-height:1}
+  #hero .next{margin-top:.6em;color:var(--muted);font-size:1.2em}
+  #hero .next b{color:var(--text)}
+  body.idle #hero{display:block}
+  body.idle #grid{height:auto;max-height:none}
+  body.idle #hdr .title{font-size:1.6em}
+  /* setup/error overlay */
+  #setup{position:fixed;inset:0;background:var(--bg);display:none;place-items:center;padding:4vw;z-index:9}
+  #setup .box{max-width:60ch;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:2em}
+  #setup h1{margin:0 0 .5em;font-size:1.6em}
+  #setup code{background:var(--panel-2);padding:.1em .4em;border-radius:6px;font-size:.9em}
+  #setup p{color:var(--muted)}
+  body.setup #setup{display:grid}
+  body.setup #hdr,body.setup #grid,body.setup #hero{display:none}
+  /* layout for 3-panel class mode: fill height */
+  body:not(.idle) #grid{height:calc(100vh - var(--hdrH,0px) - var(--cdH,0px))}
+</style>
+</head>
+<body>
+
+<div id="setup"><div class="box">
+  <h1>Classroom Display</h1>
+  <p id="setupMsg">Waiting for the sheet…</p>
+  <p>Open this page as <code>classroom-display.html?sheet=YOUR_SHEET_ID</code>. The Google Sheet must be shared as <b>Anyone with the link → Viewer</b>.</p>
+  <p>Test options: <code>?demo=1</code> (built-in sample data) · <code>&amp;now=2026-10-14T15:05</code> (pretend time) · <code>&amp;class=BCT%20A</code> (force a class)</p>
+</div></div>
+
+<header id="hdr">
+  <div class="left">
+    <div class="mode" id="mode">Loading</div>
+    <div class="title" id="title">Classroom Display</div>
+    <div class="sub" id="sub"></div>
+  </div>
+  <div class="right">
+    <div id="clock">--:--</div>
+    <div id="date"></div>
+    <div id="status">starting…</div>
+  </div>
+</header>
+
+<section id="hero">
+  <div class="big" id="heroTitle"></div>
+  <div class="next" id="heroNext"></div>
+</section>
+<div id="countdown"></div>
+
+<main id="grid"></main>
+
+<script>
+/* =====================================================================
+   Classroom Display — reads a Google Sheet and shows per-class content
+   Tabs: Settings, Classes, Due Dates, Safety Rules, Tasks, Shop Info
+   ===================================================================== */
+const DEFAULT_SHEET = '1lImz8bQA8o9Haed0Feztu4o-EjxhuPV2n6Q_vtsj_ds';
+const TABS = ['Settings','Classes','Due Dates','Safety Rules','Tasks','Shop Info','Cleanup','Groups'];
+const OPTIONAL_TABS = new Set(['Cleanup','Groups']);   // older copies of the sheet may not have these
+const qs = new URLSearchParams(location.search);
+const SHEET_ID = qs.get('sheet') || DEFAULT_SHEET;
+const DEMO = qs.get('demo') === '1';
+const FORCE_CLASS = qs.get('class');
+const FAKE_NOW = qs.get('now') ? new Date(qs.get('now')) : null;
+const bootTime = Date.now();
+
+const $ = s => document.querySelector(s);
+const now = () => FAKE_NOW ? new Date(FAKE_NOW.getTime() + (Date.now() - bootTime)) : new Date();
+
+let data = null;          // {Settings:[...], Classes:[...], ...} rows as objects keyed by header
+let lastGood = null;      // time of last successful load
+let lastErr = null;
+let settings = {};
+let currentView = '';     // key describing what's rendered, to avoid re-render churn
+let currentClass = null;  // the class currently on screen (for the cleanup countdown)
+
+/* ---------------- helpers ---------------- */
+const norm = s => String(s ?? '').trim();
+const lower = s => norm(s).toLowerCase();
+const isOn = v => { const s = lower(v); return !(s === 'false' || s === 'no' || s === '0' || v === false); };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad = n => String(n).padStart(2,'0');
+const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const DOW = ['sun','mon','tue','wed','thu','fri','sat'];
+const DOW_LONG = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function parseDate(v){
+  if (v == null || v === '') return null;
+  if (v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  const s = String(v).trim();
+  let m = s.match(/^Date\((\d+),(\d+),(\d+)/);            // gviz raw: Date(2026,9,14)
+  if (m) return new Date(+m[1], +m[2], +m[3]);
+  m = s.match(/^(?:\w{3},?\s*)?(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); // 10/14/2026 or Wed 10/14/2026
+  if (m){ let y = +m[3]; if (y < 100) y += 2000; return new Date(y, +m[1]-1, +m[2]); }
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);                 // 2026-10-14
+  if (m) return new Date(+m[1], +m[2]-1, +m[3]);
+  const d = new Date(s); return isNaN(d) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+function parseTime(v){ // -> minutes since midnight, or null
+  if (v == null || v === '') return null;
+  if (Array.isArray(v)) return v[0]*60 + (v[1]||0);        // gviz raw timeofday [h,m,s,ms]
+  const s = String(v).trim().toLowerCase();
+  let m = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(a|p)?\.?m?\.?$/);
+  if (!m) return null;
+  let h = +m[1], mi = +(m[2]||0);
+  if (m[3] === 'p' && h < 12) h += 12;
+  if (m[3] === 'a' && h === 12) h = 0;
+  return h*60 + mi;
+}
+function parseDays(v){ // -> Set of 0..6
+  const s = lower(v).replace(/\./g,'');
+  const set = new Set();
+  if (!s) return set;
+  if (/daily|every ?day|all/.test(s)) return new Set([0,1,2,3,4,5,6]);
+  if (/weekday/.test(s)) [1,2,3,4,5].forEach(d=>set.add(d));
+  if (/weekend/.test(s)) [0,6].forEach(d=>set.add(d));
+  // word tokens
+  const words = s.split(/[\s,/&+]+/).filter(Boolean);
+  const map = {su:0,sun:0,sunday:0,m:1,mo:1,mon:1,monday:1,t:2,tu:2,tue:2,tues:2,tuesday:2,w:3,we:3,wed:3,wednesday:3,
+               th:4,thu:4,thur:4,thurs:4,thursday:4,f:5,fr:5,fri:5,friday:5,sa:6,sat:6,saturday:6};
+  let anyWord = false;
+  for (const w of words){ if (w in map){ set.add(map[w]); anyWord = true; } }
+  // compact forms like MWF / TTh / MTWThF
+  if (!anyWord && words.length === 1 && /^[mtwhfsu]+$/.test(words[0])){
+    const t = words[0];
+    for (let i=0;i<t.length;i++){
+      const two = t.slice(i,i+2);
+      if (two === 'th'){ set.add(4); i++; continue; }
+      if (two === 'su'){ set.add(0); i++; continue; }
+      if (two === 'sa'){ set.add(6); i++; continue; }
+      if (two === 'tu'){ set.add(2); i++; continue; }
+      ({m:()=>set.add(1),t:()=>set.add(2),w:()=>set.add(3),f:()=>set.add(5),s:()=>set.add(6),h:()=>set.add(4),u:()=>set.add(0)})[t[i]]?.();
+    }
+  }
+  return set;
+}
+function fmtTime(mins){ const h = Math.floor(mins/60), m = mins%60; const hh = ((h+11)%12)+1; return `${hh}:${pad(m)} ${h<12?'AM':'PM'}`; }
+function fmtClock(d){ return `${((d.getHours()+11)%12)+1}:${pad(d.getMinutes())}`; }
+function sortOrder(a,b){ const ao = parseFloat(a.Order), bo = parseFloat(b.Order); const an = isNaN(ao), bn = isNaN(bo);
+  if (an && bn) return a._row - b._row; if (an) return 1; if (bn) return -1; return ao - bo || a._row - b._row; }
+function classMatch(row, cls){ const c = lower(row.Class); return c === lower(cls) || c === 'all' || c === '*' || c === ''; }
+function setting(name, dflt){ const s = settings[lower(name)]; return (s === undefined || s === '') ? dflt : s; }
+
+/* ---------------- data loading (JSONP from the gviz endpoint; no login, works from file://) ---------------- */
+let jsonpN = 0;
+function loadTab(tab){
+  return new Promise((resolve, reject) => {
+    const cb = `__gv${++jsonpN}_${Date.now()}`;
+    const s = document.createElement('script');
+    const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(SHEET_ID)}/gviz/tq?headers=1&sheet=${encodeURIComponent(tab)}&tqx=out:json;responseHandler:${cb}&_=${Date.now()}`;
+    const t = setTimeout(() => { cleanup(); reject(new Error(`timeout loading "${tab}"`)); }, 20000);
+    function cleanup(){ clearTimeout(t); delete window[cb]; s.remove(); }
+    window[cb] = res => {
+      cleanup();
+      if (!res || res.status === 'error') return reject(new Error((res?.errors?.[0]?.detailed_message) || `error loading "${tab}"`));
+      const cols = res.table.cols.map(c => norm(c.label) || c.id);
+      const rows = res.table.rows.map((r, i) => {
+        const o = { _row: i };
+        r.c.forEach((cell, j) => {
+          if (!cell) { o[cols[j]] = ''; return; }
+          let v = cell.v;
+          if (cols[j] === 'Days' || /Time$/.test(cols[j])) v = (cell.f ?? v);  // keep "3:00 PM" formatted text
+          else if (cols[j] === 'Due Date' || cols[j] === 'Date' || cols[j] === 'Done On') v = (typeof v === 'string' && v.startsWith('Date(')) ? v : (cell.f ?? v);
+          o[cols[j]] = v ?? '';
+        });
+        return o;
+      }).filter(o => Object.keys(o).some(k => k !== '_row' && norm(o[k]) !== ''));
+      resolve(rows);
+    };
+    s.onerror = () => { cleanup(); reject(new Error(`could not reach Google Sheets for "${tab}"`)); };
+    s.src = url;
+    document.head.appendChild(s);
+  });
+}
+async function loadAll(){
+  try{
+    let d;
+    if (DEMO) d = demoData();
+    else { const got = await Promise.all(TABS.map(t => OPTIONAL_TABS.has(t) ? loadTab(t).catch(()=>[]) : loadTab(t))); d = Object.fromEntries(TABS.map((t,i)=>[t, got[i]])); }
+    data = d; lastGood = Date.now(); lastErr = null;
+    settings = {}; (d.Settings||[]).forEach(r => { const k = lower(r.Setting); if (k) settings[k] = norm(r.Value); });
+    document.documentElement.style.setProperty('--scale', String(Math.min(2, Math.max(.5, (+setting('Text Size (%)', 100) || 100)/100))));
+    document.body.classList.remove('setup');
+    reconcile(); flushQueue();
+    if (!isTyping()){ currentView = ''; render(); } updateStatus();
+  }catch(e){
+    lastErr = e.message || String(e);
+    if (!data){ document.body.classList.add('setup'); $('#setupMsg').textContent = 'Could not load the sheet: ' + lastErr; }
+    updateStatus();
+  }
+}
+
+/* ---------------- schedule ---------------- */
+function classesNow(t){
+  const before = +setting('Minutes Before Class', 2) || 0;
+  const after  = +setting('Minutes After Class', 0) || 0;
+  const mins = t.getHours()*60 + t.getMinutes() + t.getSeconds()/60;
+  const dow = t.getDay();
+  const list = (data.Classes||[]).filter(c => norm(c.Class) && isOn(c.Active));
+  const active = [];
+  for (const c of list){
+    const st = parseTime(c['Start Time']), en = parseTime(c['End Time']);
+    if (st == null || en == null) continue;
+    if (FORCE_CLASS && lower(c.Class) === lower(FORCE_CLASS)) return [{...c, _st:st, _en:en}];
+    if (!parseDays(c.Days).has(dow)) continue;
+    if (mins >= st - before && mins < en + after) active.push({...c, _st:st, _en:en});
+  }
+  active.sort((a,b)=>a._st-b._st);
+  return active;
+}
+function nextClass(t){ // next upcoming (within 14 days)
+  const list = (data.Classes||[]).filter(c => norm(c.Class) && isOn(c.Active));
+  let best = null;
+  for (let add=0; add<14; add++){
+    const d = new Date(t.getFullYear(), t.getMonth(), t.getDate()+add);
+    for (const c of list){
+      const st = parseTime(c['Start Time']); if (st == null) continue;
+      if (!parseDays(c.Days).has(d.getDay())) continue;
+      const when = new Date(d.getFullYear(), d.getMonth(), d.getDate(), Math.floor(st/60), st%60);
+      if (when <= t) continue;
+      if (!best || when < best.when) best = {when, c, st};
+    }
+    if (best) break;
+  }
+  return best;
+}
+
+/* ---------------- rendering ---------------- */
+let liRows = [];
+function groupSections(rows, textKey, checkTab){
+  const map = new Map();
+  rows.sort(sortOrder).forEach(r => { const sec = norm(r.Section) || ''; if (!map.has(sec)) map.set(sec, []); map.get(sec).push(r); });
+  let html = '';
+  for (const [sec, items] of map){
+    html += `<div class="section">${sec ? `<h3>${esc(sec)}</h3>` : ''}<ul>` +
+      items.map(r => {
+        if (!checkTab) return `<li><span class="bullet"></span><span class="txt">${esc(r[textKey])}</span></li>`;
+        const key = doneKey(checkTab, r);
+        const done = isDone(key, r);
+        const mine = lower(r.Source).startsWith('screen:');
+        return `<li class="todo${done?' done':''}" data-key="${esc(key)}" data-tab="${checkTab}" data-i="${liRows.push(r)-1}" role="checkbox" aria-checked="${done}"><span class="bullet"></span><span class="txt">${esc(r[textKey])}</span>${mine?`<button class="rm" data-tab="${checkTab}" data-source="${esc(r.Source)}" title="Remove" aria-label="Remove">×</button>`:''}</li>`;
+      }).join('') + `</ul></div>`;
+  }
+  return html;
+}
+/* =====================================================================
+   Check-offs and write-in items
+   With a Write-back URL in Settings, every change is posted to the sheet's Apps Script and the
+   sheet is the source of truth; local state only bridges the gap until the next refresh.
+   Without one, changes live in this browser for today only.
+   ===================================================================== */
+const WB = () => norm(setting('Write-back URL', ''));
+const lsKey = n => `cd:${n}:${SHEET_ID}:${ymd(now())}`;
+function lsGet(n, dflt){ try { return JSON.parse(localStorage.getItem(lsKey(n))) ?? dflt; } catch(e){ return dflt; } }
+function lsSet(n, v){ try { localStorage.setItem(lsKey(n), JSON.stringify(v)); } catch(e){} }
+const localAdded = () => lsGet('added', []);          // [{id, tab, cls, text}] not yet seen back from the sheet
+const saveLocalAdded = a => lsSet('added', a);
+const localDone = () => lsGet('done', {});            // {key: 1|0} overrides until the sheet agrees
+const saveLocalDone = o => lsSet('done', o);
+const localRemoved = () => lsGet('removed', []);      // source ids deleted on screen, until the sheet drops them
+const saveLocalRemoved = a => lsSet('removed', a);
+
+/* --- posting to the sheet, with a retry queue for when the network blips --- */
+let saveState = '';
+async function post(payload){
+  if (!WB()) return;
+  const q = lsGet('queue', []); q.push(payload); lsSet('queue', q);
+  flushQueue();
+}
+let flushing = false;
+async function flushQueue(){
+  if (flushing || !WB()) return; flushing = true;
+  try{
+    let q = lsGet('queue', []);
+    while (q.length){
+      saveState = 'saving'; updateStatus();
+      const res = await fetch(WB(), { method:'POST', body: JSON.stringify(q[0]), headers: {'Content-Type':'text/plain'} });
+      const j = await res.json().catch(()=>({ok:false, error:'bad response'}));
+      if (!j.ok) throw new Error(j.error || 'write failed');
+      q.shift(); lsSet('queue', q);
+    }
+    saveState = 'saved';
+  }catch(e){ saveState = 'unsaved'; console.warn('write-back:', e.message); }
+  flushing = false; updateStatus();
+}
+
+/* --- rows the sheet has for a class, plus write-ins the sheet hasn't echoed back yet --- */
+function checkBody(rows, tab, cls){
+  const removed = new Set(localRemoved());
+  rows = rows.filter(r => !removed.has(lower(r.Source)));
+  const pending = localAdded().filter(a => a.tab === tab && lower(a.cls) === lower(cls) && !rows.some(r => lower(r.Source) === 'screen:'+a.id));
+  let html = '';
+  const made = pending.map(a => ({Class: cls, Section: 'Added on screen', Task: a.text, Source: 'screen:'+a.id, Order: 0, _row: -1}));
+  const all = made.concat(rows.map(r => (lower(r.Source).startsWith('screen:') && norm(r.Order) === '') ? {...r, Order: 0} : r));
+  if (!all.length) return '';
+  return groupSections(all, 'Task', tab);
+}
+const addRow = (tab, cls) => `<div class="addrow" data-tab="${tab}" data-cls="${esc(cls)}"><button class="add-btn">+ Add item</button><input class="add-input" type="text" maxlength="140" placeholder="Type an item, press Enter" hidden></div>`;
+function addItem(tab, cls, text){
+  text = norm(text); if (!text) return;
+  const id = Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  const a = localAdded(); a.push({id, tab, cls, text}); saveLocalAdded(a);
+  post({action:'add', tab, class: cls, task: text, id});
+  currentView = ''; render();
+}
+function removeItem(tab, source){
+  source = lower(source);
+  saveLocalAdded(localAdded().filter(a => 'screen:'+a.id !== source));
+  const rm = localRemoved(); if (!rm.includes(source)) rm.push(source); saveLocalRemoved(rm);
+  const o = localDone(); Object.keys(o).forEach(k => { if (k.endsWith('|'+source)) delete o[k]; }); saveLocalDone(o);
+  post({action:'remove', tab, source});
+  currentView = ''; render();
+}
+document.addEventListener('click', e => {
+  const rm = e.target.closest('.rm'); if (rm){ e.stopPropagation(); removeItem(rm.dataset.tab, rm.dataset.source); return; }
+  const btn = e.target.closest('.add-btn'); if (btn){ const row = btn.closest('.addrow'); btn.hidden = true; const inp = row.querySelector('.add-input'); inp.hidden = false; inp.value=''; inp.focus(); return; }
+});
+document.addEventListener('keydown', e => {
+  const inp = e.target.closest && e.target.closest('.add-input'); if (!inp) return;
+  const row = inp.closest('.addrow');
+  if (e.key === 'Enter'){ e.preventDefault(); addItem(row.dataset.tab, row.dataset.cls, inp.value); }
+  else if (e.key === 'Escape'){ inp.hidden = true; row.querySelector('.add-btn').hidden = false; }
+});
+document.addEventListener('focusout', e => { const inp = e.target.closest && e.target.closest('.add-input'); if (inp && !norm(inp.value)){ inp.hidden = true; inp.closest('.addrow').querySelector('.add-btn').hidden = false; } });
+const isTyping = () => document.activeElement && document.activeElement.classList.contains('add-input');
+
+/* --- done state --- */
+// a screen-made row is keyed by its Source id (text may be edited in the sheet); others by class+section+text
+const doneKey = (tab, r) => lower(r.Source).startsWith('screen:') ? `${tab}|${lower(r.Source)}` : `${tab}|${lower(r.Class)}|${norm(r.Section)}|${norm(r.Task)}`;
+function sheetDone(r){
+  if (!r || lower(r.Done) !== 'true') return false;
+  const d = parseDate(r['Done On']);
+  return !d || ymd(d) === ymd(now());          // a tick from an earlier day doesn't count
+}
+function isDone(key, r){ const o = localDone(); return key in o ? !!o[key] : sheetDone(r); }
+function toggleDone(li){
+  const key = li.dataset.key; const o = localDone();
+  const nowDone = !li.classList.contains('done');
+  o[key] = nowDone ? 1 : 0; saveLocalDone(o);
+  li.classList.toggle('done', nowDone); li.setAttribute('aria-checked', nowDone);
+  updateDoneCounts();
+  const r = li._row; if (r) post({action:'done', tab: li.dataset.tab, class: r.Class, section: r.Section, task: r.Task, source: r.Source || '', done: nowDone});
+}
+/* after each sheet refresh: drop local overrides the sheet now agrees with, and write-ins it has echoed back */
+function reconcile(){
+  if (!WB()) return;
+  const rows = tab => (data[tab === 'tasks' ? 'Tasks' : 'Cleanup'] || []);
+  const o = localDone(); let changed = false;
+  for (const key of Object.keys(o)){
+    const tab = key.split('|')[0]; const r = rows(tab).find(r => doneKey(tab, r) === key);
+    if (r && sheetDone(r) === !!o[key]){ delete o[key]; changed = true; }
+  }
+  if (changed) saveLocalDone(o);
+  const seen = new Set(rows('tasks').concat(rows('cleanup')).map(r => lower(r.Source)));
+  saveLocalAdded(localAdded().filter(a => !seen.has('screen:'+a.id)));
+  saveLocalRemoved(localRemoved().filter(src => seen.has(src)));
+}
+function updateDoneCounts(){
+  document.querySelectorAll('.panel').forEach(p => {
+    const all = p.querySelectorAll('li.todo'); if (!all.length) return;
+    const done = p.querySelectorAll('li.todo.done').length;
+    const c = p.querySelector('h2 .count'); if (c) c.textContent = `${done}/${all.length}`;
+    p.classList.toggle('all-done', done === all.length);
+  });
+}
+document.addEventListener('click', e => { if (e.target.closest('.rm')) return; const li = e.target.closest('li.todo'); if (li) toggleDone(li); });
+/* show the pointer while someone is using the screen, hide it again when idle */
+let cursorT; document.addEventListener('keydown', () => document.body.classList.add('pointer')); document.addEventListener('pointermove', () => { document.body.classList.add('pointer'); clearTimeout(cursorT); cursorT = setTimeout(() => document.body.classList.remove('pointer'), 4000); });
+function panel(title, bodyHtml, count, cls='', footer=''){
+  return `<section class="panel ${cls}"><h2>${esc(title)}${count!=null?`<span class="count">${count}</span>`:''}</h2><div class="scroll"><div class="inner">${bodyHtml || `<div class="empty">Nothing here yet</div>`}</div></div>${footer}</section>`;
+}
+function renderClass(c, t){
+  const today = ymd(t);
+  const todayMid = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+  // tasks
+  const tasks = (data.Tasks||[]).filter(r => norm(r.Task) && isOn(r.Show) && classMatch(r,c.Class))
+    .filter(r => { const d = parseDate(r.Date); return !d || ymd(d) === today; });
+  // due dates
+  const pastDays = +setting('Show Past Due (days)', 0) || 0;
+  const maxDue = +setting('Due Dates To Show', 8) || 8;
+  const due = (data['Due Dates']||[]).filter(r => norm(r.Assignment) && isOn(r.Show) && classMatch(r,c.Class))
+    .map(r => ({...r, _d: parseDate(r['Due Date'])}))
+    .filter(r => r._d && (r._d - todayMid)/864e5 >= -pastDays)
+    .sort((a,b)=>a._d-b._d || a._row-b._row).slice(0, maxDue);
+  const dueHtml = due.length ? `<ul>` + due.map(r => {
+    const days = Math.round((r._d - todayMid)/864e5);
+    const cls = days <= 0 ? 'today' : days <= 2 ? 'soon' : '';
+    const rel = days < 0 ? `${-days}d late` : days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : days < 7 ? DOW_LONG[r._d.getDay()].slice(0,3) : `in ${days}d`;
+    return `<li class="${cls}"><span class="when"><b>${MON[r._d.getMonth()]} ${r._d.getDate()}</b><small>${rel}</small></span><span class="txt">${esc(r.Assignment)}${norm(r.Details)?`<span class="detail">${esc(r.Details)}</span>`:''}</span></li>`;
+  }).join('') + `</ul>` : '';
+  // safety
+  const safety = (data['Safety Rules']||[]).filter(r => norm(r.Rule) && isOn(r.Show) && classMatch(r,c.Class));
+
+  const showDue = isOn(c['Show Due Dates']) && due.length > 0;   // unchecked in Classes, or nothing due → no panel
+  $('#grid').className = showDue ? '' : 'two';
+  $('#grid').innerHTML =
+    panel("Today's Tasks", checkBody(tasks, 'tasks', c.Class), '', 'check', addRow('tasks', c.Class)) +
+    (showDue ? panel('Due Dates', dueHtml, due.length || null, 'due') : '') +
+    panel('Safety Rules', safety.length ? groupSections(safety,'Rule') : '', null);
+  document.body.classList.remove('idle');
+  document.documentElement.style.setProperty('--accent', /^#[0-9a-f]{6}$/i.test(norm(c.Color)) ? norm(c.Color) : '#f5a524');
+  $('#mode').textContent = t.getHours()*60+t.getMinutes() < c._st ? 'Starting soon' : 'In session';
+  $('#title').textContent = c.Class;
+  $('#sub').textContent = [`${fmtTime(c._st)} – ${fmtTime(c._en)}`, norm(c.Room), norm(c.Teacher)].filter(Boolean).join('  ·  ');
+}
+function renderCleanup(c, t){
+  const list = (data.Cleanup||[]).filter(r => norm(r.Task) && isOn(r.Show) && classMatch(r,c.Class))
+    .filter(r => { const d = parseDate(r.Date); return !d || ymd(d) === ymd(t); });
+  const groups = (data.Groups||[]).filter(r => (norm(r.Group) || norm(r.Members)) && isOn(r.Show) && classMatch(r,c.Class)).sort(sortOrder);
+  const groupsHtml = groups.length ? `<div class="groups">` + groups.map(g => `
+      <div class="group">
+        <div class="gname">${esc(norm(g.Group) || 'Group')}</div>
+        ${norm(g['Assigned To']) ? `<div class="gjob">${esc(g['Assigned To'])}</div>` : ''}
+        <div class="gmembers">${esc(g.Members)}</div>
+      </div>`).join('') + `</div>` : '';
+  $('#grid').className = 'cleanup';
+  $('#grid').innerHTML =
+    panel('Cleanup Checklist', checkBody(list, 'cleanup', c.Class), '', 'check', addRow('cleanup', c.Class)) +
+    panel('Groups', groupsHtml, groups.length || null);
+  document.body.classList.remove('idle');
+  document.body.classList.add('cleanup');
+  document.documentElement.style.setProperty('--accent', '#3ddc84');
+  $('#mode').textContent = 'Cleanup time';
+  $('#title').textContent = `${c.Class} · Cleanup`;
+  $('#sub').textContent = [`Class ends ${fmtTime(c._en)}`, norm(c.Room), norm(c.Teacher)].filter(Boolean).join('  ·  ');
+}
+function updateCountdown(){
+  const el = $('#countdown'); if (!el) return;
+  const t = now(); const c = currentClass; if (!c) { el.textContent = ''; return; }
+  const secs = Math.max(0, Math.round((c._en*60) - (t.getHours()*3600 + t.getMinutes()*60 + t.getSeconds())));
+  el.innerHTML = `<b>${Math.floor(secs/60)}:${pad(secs%60)}</b> until class ends`;
+  el.classList.toggle('urgent', secs <= 5*60);
+}
+function renderIdle(t){
+  const info = (data['Shop Info']||[]).filter(r => norm(r.Item) && isOn(r.Show));
+  const map = new Map();
+  info.sort(sortOrder).forEach(r => { const s = norm(r.Section) || 'Shop Info'; if (!map.has(s)) map.set(s, []); map.get(s).push(r); });
+  let html = '';
+  for (const [sec, items] of map) html += panel(sec, `<ul>` + items.map(r=>`<li><span class="bullet"></span><span class="txt">${esc(r.Item)}</span></li>`).join('') + `</ul>`, null);
+  if (!html) html = panel('Shop Info', '', null);
+  $('#grid').className = 'idle';
+  $('#grid').innerHTML = html;
+  document.body.classList.add('idle');
+  document.documentElement.style.setProperty('--accent', '#f5a524');
+  $('#mode').textContent = 'No class in session';
+  $('#title').textContent = setting('Display Title', 'Shop');
+  $('#sub').textContent = setting('Subtitle', '');
+  const nx = nextClass(t);
+  if (nx){
+    const sameDay = ymd(nx.when) === ymd(t);
+    const dayTxt = sameDay ? 'today' : ymd(nx.when) === ymd(new Date(t.getFullYear(),t.getMonth(),t.getDate()+1)) ? 'tomorrow' : DOW_LONG[nx.when.getDay()];
+    const mins = Math.round((nx.when - t)/60000);
+    const rel = mins < 60 ? `in ${mins} min` : mins < 24*60 ? `in ${Math.floor(mins/60)} h ${mins%60} min` : `in ${Math.round(mins/1440)} days`;
+    $('#heroTitle').innerHTML = `Next class: ${esc(nx.c.Class)}`;
+    $('#heroNext').innerHTML = `${dayTxt[0].toUpperCase()+dayTxt.slice(1)} at <b>${fmtTime(nx.st)}</b> · ${rel}`;
+  } else { $('#heroTitle').textContent = setting('Display Title', 'Shop'); $('#heroNext').textContent = 'No upcoming classes on the schedule'; }
+}
+function render(){
+  if (!data) return;
+  const t = now();
+  const active = classesNow(t);
+  const c = active[0]; currentClass = c || null;
+  const mins = t.getHours()*60 + t.getMinutes() + t.getSeconds()/60;
+  const cleanupMin = c ? (+norm(c['Cleanup Minutes']) || +setting('Cleanup Minutes Before End', 30) || 0) : 0;
+  const phase = !c ? 'idle' : mins < c._st ? 'pre' : (cleanupMin > 0 && mins >= c._en - cleanupMin && mins < c._en) ? 'cleanup' : 'in';
+  const key = c ? `class:${c.Class}:${ymd(t)}:${phase}` : `idle:${ymd(t)}:${t.getHours()}:${t.getMinutes()}`;
+  if (key === currentView) return;
+  currentView = key;
+  liRows = [];
+  document.body.classList.remove('cleanup');
+  if (phase === 'cleanup') renderCleanup(c, t); else if (c) renderClass(c, t); else renderIdle(t);
+  if (phase === 'cleanup') updateCountdown();
+  document.querySelectorAll('li.todo[data-i]').forEach(li => { li._row = liRows[+li.dataset.i]; });
+  updateDoneCounts();
+  requestAnimationFrame(() => { document.documentElement.style.setProperty('--hdrH', $('#hdr').offsetHeight + 'px'); document.documentElement.style.setProperty('--cdH', $('#countdown').offsetHeight + 'px'); setupScrollers(); });
+}
+
+/* ---------------- gentle auto-scroll for overflowing panels ---------------- */
+let scrollers = [];
+function setupScrollers(){
+  scrollers = [];
+  document.querySelectorAll('.scroll').forEach(box => {
+    const inner = box.querySelector('.inner');
+    inner.style.transform = '';
+    const overflow = inner.scrollHeight - box.clientHeight;
+    if (overflow > 40) scrollers.push({inner, overflow, t0: performance.now() + 4000});
+  });
+}
+function tickScroll(ts){
+  for (const s of scrollers){
+    const period = 6000 + s.overflow * 40;   // slower for longer lists
+    const hold = 4000;
+    const cycle = period*2 + hold*2;
+    let p = ((ts - s.t0) % cycle + cycle) % cycle;
+    let y;
+    if (p < period) y = p/period;
+    else if (p < period + hold) y = 1;
+    else if (p < period*2 + hold) y = 1 - (p - period - hold)/period;
+    else y = 0;
+    y = (1 - Math.cos(y*Math.PI))/2;
+    s.inner.style.transform = `translateY(${-s.overflow*y}px)`;
+  }
+  requestAnimationFrame(tickScroll);
+}
+requestAnimationFrame(tickScroll);
+
+/* ---------------- clock / status / loops ---------------- */
+function updateStatus(){
+  const st = $('#status');
+  if (lastErr){ st.className = 'err'; st.textContent = lastGood ? `offline · showing data from ${fmtClock(new Date(lastGood))}` : 'can’t reach sheet'; }
+  else { st.className = saveState === 'unsaved' ? 'err' : ''; st.textContent = (lastGood ? `updated ${fmtClock(new Date(lastGood))}` : 'loading…') + (saveState === 'saving' ? ' · saving…' : saveState === 'unsaved' ? ' · changes not saved yet' : ''); }
+}
+function tick(){
+  const t = now();
+  $('#clock').textContent = fmtClock(t);
+  $('#date').textContent = `${DOW_LONG[t.getDay()]}, ${MON[t.getMonth()]} ${t.getDate()}`;
+  render();
+  if (document.body.classList.contains('cleanup')) updateCountdown();
+}
+setInterval(tick, 1000); tick();
+loadAll();
+(function scheduleRefresh(){
+  const every = Math.max(20, +setting('Refresh Every (seconds)', 60) || 60) * 1000;
+  setTimeout(async () => { await loadAll(); updateStatus(); scheduleRefresh(); }, every);
+})();
+setTimeout(() => location.reload(), 6*3600*1000);   // full reload every 6 h keeps a kiosk browser fresh
+
+/* ---------------- demo data (?demo=1) ---------------- */
+function demoData(){
+  const t = now(); const d = n => { const x = new Date(t.getFullYear(),t.getMonth(),t.getDate()+n); return `${x.getMonth()+1}/${x.getDate()}/${x.getFullYear()}`; };
+  const todayDow = DOW[t.getDay()];
+  const row = (o,i)=>({_row:i,...o});
+  return {
+    Settings: [{Setting:'Display Title',Value:'Construction Shop'},{Setting:'Subtitle',Value:'Marin CTE Center · Terra Linda High School'},{Setting:'Minutes Before Class',Value:'2'},{Setting:'Refresh Every (seconds)',Value:'60'},{Setting:'Due Dates To Show',Value:'8'},{Setting:'Text Size (%)',Value:'100'}].map(row),
+    Classes: [{Class:'BCT A',Days:'Wed',"Start Time":'3:00 PM',"End Time":'7:00 PM',Room:'Shop',Teacher:'Mr. Dixon',Color:'#F5A524',Active:true,"Show Due Dates":false},
+              {Class:'Demo Class',Days:todayDow,"Start Time":'8:00 AM',"End Time":'9:30 AM',Color:'#4DA3FF',Active:true}].map(row),
+    'Due Dates': [{Class:'BCT A',Assignment:'Tape measure quiz',"Due Date":d(0),Details:'In class, 4:00',Show:true},{Class:'BCT A',Assignment:'Cut list worksheet',"Due Date":d(2),Details:'Turn in on paper',Show:true},
+                  {Class:'BCT A',Assignment:'Sawhorse project',"Due Date":d(14),Details:'Both horses, sanded',Show:true},{Class:'Demo Class',Assignment:'Other class item',"Due Date":d(1),Show:true},
+                  {Class:'All',Assignment:'Safety contract signed',"Due Date":d(7),Details:'Parent signature required',Show:true}].map(row),
+    'Safety Rules': [{Class:'All',Section:'PPE',Rule:'Safety glasses on at all times in the shop',Order:1,Show:true},{Class:'All',Section:'PPE',Rule:'Closed-toe shoes; tie back long hair; no loose clothing or jewelry',Order:2,Show:true},
+                     {Class:'All',Section:'Power Tools',Rule:'Only use a tool you have been signed off on',Order:3,Show:true},{Class:'All',Section:'Power Tools',Rule:'One person per machine — wait for the blade to stop before reaching in',Order:4,Show:true},
+                     {Class:'All',Section:'Shop Conduct',Rule:'Report every injury, no matter how small, right away',Order:5,Show:true},{Class:'All',Section:'Shop Conduct',Rule:'Keep walkways and benches clear; clean up as you go',Order:6,Show:true},
+                     {Class:'BCT A',Section:"Today's Focus",Rule:'Circular saw: support both sides of the cut',Order:7,Show:true},{Class:'BCT A',Section:"Today's Focus",Rule:'Never cut with the guard tied back',Order:8,Show:true}].map(row),
+    Tasks: [{Class:'BCT A',Date:'',Section:'Start of Class',Task:'Sign in and grab your safety glasses',Order:1,Show:true,Done:true,'Done On':'10/1/2026'},{Class:'BCT A',Date:d(0),Section:'Main Work',Task:'Measure and mark sawhorse legs',Order:2,Show:true},
+            {Class:'BCT A',Date:d(0),Section:'Main Work',Task:'Tape measure quiz at 4:00',Order:3,Show:true},{Class:'BCT A',Date:d(1),Section:'Main Work',Task:'THIS IS TOMORROW — should not show',Order:4,Show:true},
+            {Class:'BCT A',Date:'',Section:'End of Class',Task:'Cleanup starts 15 minutes before the end of class',Order:9,Show:true},{Class:'BCT A',Date:'',Section:'End of Class',Task:'Hidden row test',Order:10,Show:false}].map(row),
+    Cleanup: [{Class:'All',Section:'Tools',Task:'Unplug and return every power tool to its labeled spot',Order:1,Show:true},{Class:'All',Section:'Tools',Task:'Hand tools back on the shadow board — check for empty outlines',Order:2,Show:true},
+              {Class:'All',Section:'Benches',Task:'Clear your bench: scrap to the scrap bin, usable cutoffs to the rack',Order:3,Show:true},{Class:'All',Section:'Benches',Task:'Wipe down bench tops; clamps back in the clamp rack',Order:4,Show:true},
+              {Class:'All',Section:'Floor',Task:'Sweep your area, then the walkways',Order:5,Show:true},{Class:'All',Section:'Floor',Task:'Shop vac the table saw and miter saw stations',Order:6,Show:true},
+              {Class:'BCT A',Section:'Today',Task:'Stack sawhorse parts by group number on the back table',Order:7,Show:true},{Class:'BCT A',Section:'Added on screen',Task:'Sheet-echoed write-in',Order:0,Show:true,Source:'screen:demo1'},{Class:'All',Section:'Sign-out',Task:'Safety glasses back in the bin; instructor checks your zone before you leave',Order:9,Show:true}].map(row),
+    Groups: [{Class:'BCT A',Group:'Group 1',Members:'Alex, Jordan, Sam',"Assigned To":'Tools & shadow board',Show:true},{Class:'BCT A',Group:'Group 2',Members:'Taylor, Casey, Riley',"Assigned To":'Benches & clamps',Show:true},
+             {Class:'BCT A',Group:'Group 3',Members:'Morgan, Drew, Jamie',"Assigned To":'Floor & walkways',Show:true},{Class:'BCT A',Group:'Group 4',Members:'Quinn, Avery',"Assigned To":'Saw stations & shop vac',Show:true},
+             {Class:'Demo Class',Group:'Other class',Members:'should not show',Show:true}].map(row),
+    'Shop Info': [{Section:'Shop Rules',Item:'Safety glasses on before you walk past the yellow line',Order:1,Show:true},{Section:'Shop Rules',Item:'No one in the shop without an instructor present',Order:2,Show:true},
+                  {Section:'Shop Rules',Item:'Report damaged tools or cords — don’t use them',Order:3,Show:true},{Section:'Announcements',Item:'Field trip permission slips due Friday',Order:4,Show:true},
+                  {Section:'Announcements',Item:'Shop closed for cleaning next Monday',Order:5,Show:true}].map(row),
+  };
+}
+</script>
+</body>
+</html>
