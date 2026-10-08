@@ -195,6 +195,13 @@ function parseTime(v){ // -> minutes since midnight, or null
   if (m[3] === 'a' && h === 12) h = 0;
   return h*60 + mi;
 }
+function parseDates(v){ // "10/17/2026, 11/7/2026" -> Set of 'YYYY-MM-DD'
+  const set = new Set();
+  String(v ?? '').split(/[,;\n]+/).forEach(tok => { const d = parseDate(tok.trim()); if (d) set.add(ymd(d)); });
+  return set;
+}
+// does class c meet on calendar day d? (weekly Days, plus any specific Dates)
+function meetsOn(c, d){ return parseDays(c.Days).has(d.getDay()) || parseDates(c.Dates).has(ymd(d)); }
 function parseDays(v){ // -> Set of 0..6
   const s = lower(v).replace(/\./g,'');
   const set = new Set();
@@ -247,7 +254,7 @@ function loadTab(tab){
         r.c.forEach((cell, j) => {
           if (!cell) { o[cols[j]] = ''; return; }
           let v = cell.v;
-          if (cols[j] === 'Days' || /Time$/.test(cols[j])) v = (cell.f ?? v);  // keep "3:00 PM" formatted text
+          if (cols[j] === 'Days' || cols[j] === 'Dates' || /Time$/.test(cols[j])) v = (cell.f ?? v);  // keep "3:00 PM" formatted text
           else if (cols[j] === 'Due Date' || cols[j] === 'Date' || cols[j] === 'Done On') v = (typeof v === 'string' && v.startsWith('Date(')) ? v : (cell.f ?? v);
           o[cols[j]] = v ?? '';
         });
@@ -290,7 +297,7 @@ function classesNow(t){
     const st = parseTime(c['Start Time']), en = parseTime(c['End Time']);
     if (st == null || en == null) continue;
     if (FORCE_CLASS && lower(c.Class) === lower(FORCE_CLASS)) return [{...c, _st:st, _en:en}];
-    if (!parseDays(c.Days).has(dow)) continue;
+    if (!meetsOn(c, t)) continue;
     if (mins >= st - before && mins < en + after) active.push({...c, _st:st, _en:en});
   }
   active.sort((a,b)=>a._st-b._st);
@@ -303,7 +310,7 @@ function nextClass(t){ // next upcoming (within 14 days)
     const d = new Date(t.getFullYear(), t.getMonth(), t.getDate()+add);
     for (const c of list){
       const st = parseTime(c['Start Time']); if (st == null) continue;
-      if (!parseDays(c.Days).has(d.getDay())) continue;
+      if (!meetsOn(c, d)) continue;
       const when = new Date(d.getFullYear(), d.getMonth(), d.getDate(), Math.floor(st/60), st%60);
       if (when <= t) continue;
       if (!best || when < best.when) best = {when, c, st};

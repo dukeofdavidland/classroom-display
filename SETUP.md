@@ -13,7 +13,7 @@ This guide takes you from nothing to a working classroom TV display in about 30 
 
 - A Google account (for the sheet and the Apps Script).
 - A TV or monitor with any device that runs a browser (a Chromebox, a Raspberry Pi, an old laptop, a smart TV browser).
-- Optional: a GitHub account and a Netlify account if you want to host your own copy of the page. If another room already hosts one, you can use theirs with your own sheet (step 4, option A).
+- Optional: a GitHub account and a free Cloudflare account if you want to host your own copy of the page. If another room already hosts one, you can use theirs with your own sheet (step 4, option A).
 
 ---
 
@@ -69,7 +69,7 @@ The script can only do three things to your sheet: add a row, set the Done colum
 
 ### Option A — use an existing hosted copy (no hosting needed)
 
-If another room already has the page hosted (any URL ending in `.netlify.app` or wherever they put it), open it with your sheet's ID:
+If another room already has the page hosted (a `.workers.dev` address or wherever they put it), open it with your sheet's ID:
 
 ```
 https://THEIR-HOSTED-PAGE/?sheet=YOUR_SHEET_ID
@@ -79,17 +79,17 @@ That's it. The page reads *your* sheet. Nothing about your room is visible to th
 
 ### Option B — host your own
 
-1. Put these files in a GitHub repository (fork this one, or create a new repo and upload `index.html`, `Code.gs`, `netlify.toml`, `README.md`, `SETUP.md`).
+1. Put these files in a GitHub repository (fork this one, or create a new repo and upload `index.html`, `Code.gs`, `wrangler.jsonc`, `_headers`, `.assetsignore`, `README.md`, `SETUP.md`).
 2. In `index.html`, find the line near the top of the script:
    ```
    const DEFAULT_SHEET = '...';
    ```
    and put your sheet's ID between the quotes. (Or leave it and always use `?sheet=` in the URL.)
-3. Sign in to Netlify → **Add new project → Import an existing project → GitHub** → pick the repo. Build command: leave empty. Publish directory: `.` (the included `netlify.toml` already says this). Deploy.
-4. If Netlify created the site as *Private*, open the project and click **Make public**.
-5. Your page is at `https://YOUR-SITE-NAME.netlify.app`. Any push to the repo's main branch redeploys it.
+3. In `wrangler.jsonc`, change `"name"` if you want a different site name (lowercase letters, numbers and dashes).
+4. Sign in to Cloudflare (free plan is fine) → **Workers & Pages → Create application → Import a repository** → connect GitHub if asked → pick the repo. Leave the build command empty and the deploy command as `npx wrangler deploy`. Make sure the project name matches `"name"` in `wrangler.jsonc`. **Deploy**.
+5. Your page is at `https://YOUR-SITE-NAME.YOUR-SUBDOMAIN.workers.dev` (shown on the project page). Any push to the repo's main branch redeploys it. To use your own domain, open the project → **Settings → Domains & Routes → Add → Custom domain**.
 
-No Netlify? Any static host works (GitHub Pages, Cloudflare Pages, a school web server) — it's a single HTML file with no build step.
+Not using Cloudflare? Any static host works (GitHub Pages, Netlify, a school web server) — it's a single HTML file with no build step.
 
 ### On the TV
 

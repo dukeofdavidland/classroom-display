@@ -1,0 +1,8 @@
+{
+  // Cloudflare Workers static site: serves this folder as-is, no build step.
+  "name": "classroom-display",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "."
+  }
+}
