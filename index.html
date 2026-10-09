@@ -108,6 +108,21 @@
   body.setup #hdr,body.setup #grid,body.setup #hero{display:none}
   /* layout for 3-panel class mode: fill height */
   body:not(.idle) #grid{height:calc(100vh - var(--hdrH,0px) - var(--cdH,0px))}
+  /* compact header: during a class the top bar shrinks to a card in the top-right corner,
+     sitting above the last panel, so the lists get the full height of the screen */
+  body.compact #hdr{position:fixed;z-index:5;top:1.2vw;left:var(--cornerL,auto);width:var(--cornerW,30vw);box-sizing:border-box;
+    flex-direction:column;align-items:stretch;justify-content:flex-start;gap:.3em;padding:.6em .85em .7em;
+    border:3px solid var(--accent);border-radius:var(--radius)}
+  body.compact #hdr .mode{font-size:.6em}
+  body.compact #hdr .title{font-size:1.3em}
+  body.compact #hdr .sub{font-size:.68em;margin-top:.1em}
+  body.compact #hdr .right{text-align:left;display:flex;align-items:baseline;flex-wrap:wrap;gap:.2em .6em}
+  body.compact #clock{font-size:2.2em}
+  body.compact #date{font-size:.72em;margin:0}
+  body.compact #status{margin:0}
+  body.compact #countdown{padding:0;text-align:left;font-size:.85em}
+  body.compact #countdown b{font-size:1.5em}
+  body.compact #grid{height:100vh}
   /* preview / design mode (?preview=1) — never shown on the TV unless the URL asks for it */
   #pv{display:none}
   body.preview{cursor:auto}
@@ -359,6 +374,16 @@ function nextClass(t){ // next upcoming (within 14 days)
 
 /* ---------------- rendering ---------------- */
 let liRows = [];
+/* Placeholders in any item text, filled from the class on screen, so wording never drifts from the settings:
+   {cleanup} minutes of cleanup · {cleanup time} when cleanup starts · {start} · {end} · {class} */
+function cleanupMinutes(c){ return (c && +norm(c['Cleanup Minutes'])) || +setting('Cleanup Minutes Before End', 30) || 0; }
+function fillVars(s){
+  s = String(s ?? ''); if (!s.includes('{')) return s;
+  const c = currentClass, cu = cleanupMinutes(c);
+  const v = { 'cleanup': cu, 'cleanup minutes': cu, 'cleanup time': c ? fmtTime(c._en - cu) : '',
+              'start': c ? fmtTime(c._st) : '', 'end': c ? fmtTime(c._en) : '', 'class': c ? c.Class : '' };
+  return s.replace(/\{\s*([a-z ]+?)\s*\}/gi, (m, k) => (v[k.toLowerCase()] ?? m) + '');
+}
 function groupSections(rows, textKey, checkTab, secMeta){
   const map = new Map();
   rows.sort(sortOrder).forEach(r => { const sec = norm(r.Section) || ''; if (!map.has(sec)) map.set(sec, []); map.get(sec).push(r); });
@@ -368,11 +393,11 @@ function groupSections(rows, textKey, checkTab, secMeta){
     html += (meta ? `<div class="section gsec" style="--accent:${esc(meta.color)}"><h3>${esc(sec)}${meta.label ? `<span class="gtag">${esc(meta.label)}</span>` : ''}</h3>`
                   : `<div class="section">${sec ? `<h3>${esc(sec)}</h3>` : ''}`) + `<ul>` +
       items.map(r => {
-        if (!checkTab) return `<li><span class="bullet"></span><span class="txt">${esc(r[textKey])}</span></li>`;
+        if (!checkTab) return `<li><span class="bullet"></span><span class="txt">${esc(fillVars(r[textKey]))}</span></li>`;
         const key = doneKey(checkTab, r);
         const done = isDone(key, r);
         const mine = lower(r.Source).startsWith('screen:');
-        return `<li class="todo${done?' done':''}" data-key="${esc(key)}" data-tab="${checkTab}" data-i="${liRows.push(r)-1}" role="checkbox" aria-checked="${done}"><span class="bullet"></span><span class="txt">${esc(r[textKey])}</span>${mine?`<button class="rm" data-tab="${checkTab}" data-source="${esc(r.Source)}" title="Remove" aria-label="Remove">×</button>`:''}</li>`;
+        return `<li class="todo${done?' done':''}" data-key="${esc(key)}" data-tab="${checkTab}" data-i="${liRows.push(r)-1}" role="checkbox" aria-checked="${done}"><span class="bullet"></span><span class="txt">${esc(fillVars(r[textKey]))}</span>${mine?`<button class="rm" data-tab="${checkTab}" data-source="${esc(r.Source)}" title="Remove" aria-label="Remove">×</button>`:''}</li>`;
       }).join('') + `</ul></div>`;
   }
   return html;
@@ -624,7 +649,7 @@ function renderIdle(t){
   const map = new Map();
   info.sort(sortOrder).forEach(r => { const s = norm(r.Section) || 'Shop Info'; if (!map.has(s)) map.set(s, []); map.get(s).push(r); });
   let html = '';
-  for (const [sec, items] of map) html += panel(sec, `<ul>` + items.map(r=>`<li><span class="bullet"></span><span class="txt">${esc(r.Item)}</span></li>`).join('') + `</ul>`, null);
+  for (const [sec, items] of map) html += panel(sec, `<ul>` + items.map(r=>`<li><span class="bullet"></span><span class="txt">${esc(fillVars(r.Item))}</span></li>`).join('') + `</ul>`, null);
   if (!html) html = panel('Shop Info', '', null);
   $('#grid').className = 'idle';
   $('#grid').innerHTML = html;
@@ -649,7 +674,7 @@ function render(){
   const active = classesNow(t);
   const c = active[0]; currentClass = c || null;
   const mins = t.getHours()*60 + t.getMinutes() + t.getSeconds()/60;
-  const cleanupMin = c ? (+norm(c['Cleanup Minutes']) || +setting('Cleanup Minutes Before End', 30) || 0) : 0;
+  const cleanupMin = c ? cleanupMinutes(c) : 0;
   const phase = !c ? 'idle' : mins < c._st ? 'pre' : (cleanupMin > 0 && mins >= c._en - cleanupMin && mins < c._en) ? 'cleanup' : 'in';
   const key = c ? `class:${c.Class}:${ymd(t)}:${phase}` : `idle:${ymd(t)}:${t.getHours()}:${t.getMinutes()}`;
   if (key === currentView) return;
@@ -660,8 +685,26 @@ function render(){
   if (phase === 'cleanup') updateCountdown();
   document.querySelectorAll('li.todo[data-i]').forEach(li => { li._row = liRows[+li.dataset.i]; });
   updateDoneCounts();
-  requestAnimationFrame(() => { document.documentElement.style.setProperty('--hdrH', $('#hdr').offsetHeight + 'px'); document.documentElement.style.setProperty('--cdH', $('#countdown').offsetHeight + 'px'); setupScrollers(); });
+  document.body.classList.toggle('compact', !document.body.classList.contains('idle'));
+  requestAnimationFrame(() => { placeCorner(); document.documentElement.style.setProperty('--hdrH', $('#hdr').offsetHeight + 'px'); document.documentElement.style.setProperty('--cdH', $('#countdown').offsetHeight + 'px'); setupScrollers(); });
 }
+
+/* ---------------- compact corner header ---------------- */
+// The countdown lives inside the header card so it rides along into the corner.
+$('#hdr').appendChild($('#countdown'));
+function placeCorner(){
+  const panels = [...document.querySelectorAll('#grid > .panel')];
+  panels.forEach(p => p.style.marginTop = '');
+  if (!document.body.classList.contains('compact') || !panels.length) return;
+  const last = panels[panels.length - 1];
+  const r = last.getBoundingClientRect();
+  const root = document.documentElement.style;
+  root.setProperty('--cornerL', r.left + 'px'); root.setProperty('--cornerW', r.width + 'px');
+  const gap = parseFloat(getComputedStyle($('#grid')).rowGap) || 16;
+  last.style.marginTop = ($('#hdr').offsetHeight + gap) + 'px';
+}
+let cornerH = 0;
+window.addEventListener('resize', () => { placeCorner(); setupScrollers(); });
 
 /* ---------------- gentle auto-scroll for overflowing panels ---------------- */
 let scrollers = [];
@@ -768,6 +811,8 @@ function tick(){
   $('#date').textContent = `${DOW_LONG[t.getDay()]}, ${MON[t.getMonth()]} ${t.getDate()}`;
   render();
   if (document.body.classList.contains('cleanup')) updateCountdown();
+  const h = $('#hdr').offsetHeight;
+  if (document.body.classList.contains('compact') && h !== cornerH){ cornerH = h; placeCorner(); setupScrollers(); }
 }
 setInterval(tick, 1000); tick();
 loadAll();
@@ -795,7 +840,7 @@ function demoData(){
                      {Class:'BCT A',Section:"Today's Focus",Rule:'Circular saw: support both sides of the cut',Order:7,Show:true},{Class:'BCT A',Section:"Today's Focus",Rule:'Never cut with the guard tied back',Order:8,Show:true}].map(row),
     Tasks: [{Class:'BCT A',Date:'',Section:'Start of Class',Task:'Sign in and grab your safety glasses',Order:1,Show:true,Done:true,'Done On':'10/1/2026'},{Class:'BCT A',Date:d(0),Section:'Main Work',Task:'Measure and mark sawhorse legs',Order:2,Show:true},
             {Class:'BCT A',Date:d(0),Section:'Main Work',Task:'Tape measure quiz at 4:00',Order:3,Show:true},{Class:'BCT A',Date:d(1),Section:'Main Work',Task:'THIS IS TOMORROW — should not show',Order:4,Show:true},
-            {Class:'BCT A',Date:'',Section:'End of Class',Task:'Cleanup starts 15 minutes before the end of class',Order:9,Show:true},{Class:'BCT A',Date:'',Section:'End of Class',Task:'Hidden row test',Order:10,Show:false}].map(row),
+            {Class:'BCT A',Date:'',Section:'End of Class',Task:'Cleanup starts {cleanup} minutes before the end of class ({cleanup time})',Order:9,Show:true},{Class:'BCT A',Date:'',Section:'End of Class',Task:'Hidden row test',Order:10,Show:false}].map(row),
     Cleanup: [
       ...[['Put away every tool you used',1],['Your scraps in the bin, your sawdust swept',2],['Your PPE put away',3],['QC Inspector checks every spot before Step 2',4]]
         .map(([Task,Order]) => ({Class:'BCT A',Section:'Step 1 · Clean your own first',Task,Order,Show:true})),
