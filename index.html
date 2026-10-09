@@ -31,6 +31,7 @@
   #grid.idle{grid-template-columns:repeat(auto-fit,minmax(28vw,1fr))}
   #grid.two{grid-template-columns:1fr 1fr}
   #grid.one{grid-template-columns:1.75fr 1fr}
+  #grid.four{grid-template-columns:repeat(4,1fr)}
   .panel.filler{background:transparent;border:0}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);display:flex;flex-direction:column;min-height:0;overflow:hidden}
   .panel h2{margin:0;padding:.5em .8em .4em;font-size:1em;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:.5em}
@@ -133,7 +134,9 @@
   /* class timeline strip (Classes → Show Timeline): blocks from the Timeline tab across the bottom, with a "now" marker */
   #tl{display:none;padding:0 2vw 1.1vw;font-size:.66em}
   body.hastl #tl{display:block}
-  body.compact.hastl #grid,body.hastl #grid{height:calc(100vh - var(--tlH,0px))}
+  body.compact.hastl #grid,body.hastl #grid{height:calc(100vh - var(--tlH,0px) - var(--pvH,0px))}
+  body.compact:not(.hastl) #grid{height:calc(100vh - var(--pvH,0px))}
+  body.preview #tl{margin-bottom:var(--pvH,0px)}
   .tlhead{display:flex;justify-content:space-between;align-items:baseline;gap:1em;margin-bottom:.35em;color:var(--muted);white-space:nowrap;overflow:hidden}
   .tlhead b{color:var(--text)}
   .tlhead .tlnow b{color:var(--tlc,var(--accent))}
@@ -247,6 +250,7 @@ const DEMO = qs.get('demo') === '1';
 const PREVIEW = qs.has('preview') && qs.get('preview') !== '0';   // design mode: pick a class + view, nothing is saved
 let FORCE_CLASS = qs.get('class');
 let FORCE_IDLE = false;
+let PREFER_CLASS = null;
 let FAKE_NOW = qs.get('now') ? new Date(qs.get('now')) : null;
 let bootTime = Date.now();
 
@@ -287,7 +291,9 @@ function parseTime(v){ // -> minutes since midnight, or null
   if (v == null || v === '') return null;
   if (Array.isArray(v)) return v[0]*60 + (v[1]||0);        // gviz raw timeofday [h,m,s,ms]
   const s = String(v).trim().toLowerCase();
-  let m = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(a|p)?\.?m?\.?$/);
+  let m = s.match(/^date\(\d+,\d+,\d+,(\d+),(\d+)/);   // gviz raw date-time: Date(1899,11,30,15,0,0)
+  if (m) return +m[1]*60 + +m[2];
+  m = s.match(/^(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(a|p)?\.?m?\.?$/);
   if (!m) return null;
   let h = +m[1], mi = +(m[2]||0);
   if (m[3] === 'p' && h < 12) h += 12;
@@ -397,6 +403,8 @@ function classesNow(t){
     const st = parseTime(c['Start Time']), en = parseTime(c['End Time']);
     if (st == null || en == null) continue;
     if (FORCE_CLASS && lower(c.Class) === lower(FORCE_CLASS)) return [{...c, _st:st, _en:en}];
+    // preview "exact time" with a class picked: that class counts as meeting today, but only during its hours
+    if (PREFER_CLASS && lower(c.Class) === lower(PREFER_CLASS)){ if (mins >= st - before && mins < en + after) return [{...c, _st:st, _en:en}]; continue; }
     if (!meetsOn(c, t)) continue;
     if (mins >= st - before && mins < en + after) active.push({...c, _st:st, _en:en});
   }
@@ -430,7 +438,7 @@ function fillVars(s){
   const c = currentClass, cu = cleanupMinutes(c);
   const v = { 'cleanup': cu, 'cleanup minutes': cu, 'cleanup time': c ? fmtTime(c._en - cu) : '',
               'start': c ? fmtTime(c._st) : '', 'end': c ? fmtTime(c._en) : '', 'class': c ? c.Class : '' };
-  return s.replace(/\{\s*([a-z ]+?)\s*\}/gi, (m, k) => (v[k.toLowerCase()] ?? m) + '');
+  return s.replace(/\{\s*([a-z ]+?)\s*\}/gi, (m, k) => (Object.prototype.hasOwnProperty.call(v, k.toLowerCase()) ? v[k.toLowerCase()] : m) + '');
 }
 function groupSections(rows, textKey, checkTab, secMeta){
   const map = new Map();
@@ -608,10 +616,13 @@ function renderClass(c, t){
   ].filter(p => p.on !== false);
   // Classes → Page 2 lists the panels that move to the second page; the Class Plan only ever shows on page 2
   const p2 = page2Set(c);
-  const onPage = PAGE === 2 ? [...all.filter(p => p.id === 'plan' && p2.has('plan')), ...all.filter(p => p.id !== 'plan' && p2.has(p.id))]
-                            : all.filter(p => !p2.has(p.id) && p.id !== 'plan');
-  $('#grid').className = ['one', 'one', 'two', ''][Math.min(onPage.length, 3)];
-  $('#grid').innerHTML = (onPage.map(p => p.html()).join('') || panel('Page 2', '', null)) + (onPage.length <= 1 ? `<section class="panel filler"></section>` : '');
+  const page2 = [...all.filter(p => p.id === 'plan' && p2.has('plan')), ...all.filter(p => p.id !== 'plan' && p2.has(p.id))];
+  const page1 = all.filter(p => !p2.has(p.id) && p.id !== 'plan');
+  // only offer Page 2 when both pages would have something on them; otherwise show one page with what there is
+  pagesAvail = page1.length > 0 && page2.length > 0;
+  const onPage = !pagesAvail ? (page1.length ? page1 : page2) : PAGE === 2 ? page2 : page1;
+  $('#grid').className = ['one', 'one', 'two', '', 'four'][Math.min(onPage.length, 4)];
+  $('#grid').innerHTML = onPage.map(p => p.html()).join('') + (onPage.length <= 1 ? `<section class="panel filler"></section>` : '');
   document.body.classList.remove('idle');
   document.documentElement.style.setProperty('--accent', /^#[0-9a-f]{6}$/i.test(norm(c.Color)) ? norm(c.Color) : '#f5a524');
   $('#mode').textContent = t.getHours()*60+t.getMinutes() < c._st ? 'Starting soon' : 'In session';
@@ -626,24 +637,34 @@ const TL_PALETTE = ['#60A5FA','#F472B6','#A78BFA','#FB923C','#2DD4BF','#FACC15',
 function timelinePlan(c, t){
   const rows = (data.Timeline||[]).filter(r => norm(r.Block) && isOn(r.Show) && classMatch(r, c.Class));
   const today = rows.filter(r => { const d = parseDate(r.Date); return d && ymd(d) === ymd(t); });
-  const use = (today.length ? today : rows.filter(r => !parseDate(r.Date)))
-    .map(r => ({ r, st: parseTime(r.Start), en: parseTime(r.End) }))
-    .sort((a,b) => (a.st ?? 1e4) - (b.st ?? 1e4) || sortOrder(a.r, b.r));
+  const use = (today.length ? today : rows.filter(r => !parseDate(r.Date))).sort(sortOrder);
   if (!use.length) return null;
-  let cur = c._st;
-  const blocks = use.map((x, i) => {
-    const st = Math.max(c._st, x.st ?? cur);
-    cur = x.en ?? st;
-    return { name: norm(x.r.Block), details: norm(x.r.Details), color: cssColor(x.r.Color) || TL_PALETTE[i % TL_PALETTE.length], st, en: x.en };
-  });
-  blocks.forEach((b, i) => { if (b.en == null || b.en <= b.st) b.en = i + 1 < blocks.length ? blocks[i+1].st : c._en; b.en = Math.min(b.en, c._en); });
-  const cu = cleanupMinutes(c);
-  let list = blocks.filter(b => b.en > b.st);
-  if (cu > 0 && !list.some(b => /clean/i.test(b.name))){
-    const cs = c._en - cu;
-    list = list.filter(b => b.st < cs).map(b => ({ ...b, en: Math.min(b.en, cs) }));
-    list.push({ name: 'Cleanup', details: '', color: '#3DDC84', st: cs, en: c._en, auto: true });
+  const cu = cleanupMinutes(c), cs = cu > 0 ? c._en - cu : c._en;
+  // a time typed without AM/PM ("3:30") reads as morning; move it into the class's afternoon when that fits
+  const tm = v => { let m = parseTime(v); if (m != null && m < c._st && m + 720 >= c._st && m + 720 <= c._en) m += 720; return m; };
+  const items = use.map((r, i) => ({ r, i, st: tm(r.Start), en: tm(r.End) }));
+  // chain in sheet order: a blank Start follows the previous block; rows with no times split the gap evenly
+  const blocks = []; let cur = c._st;
+  for (let i = 0; i < items.length; ){
+    const x = items[i], st = Math.max(c._st, x.st ?? cur);
+    if (x.en != null && x.en > st){ blocks.push({ x, st, en: x.en }); cur = x.en; i++; continue; }
+    let j = i + 1; while (j < items.length && items[j].st == null && items[j].en == null) j++;
+    let bound = cs, last = j;
+    if (j < items.length){ if (items[j].st != null) bound = items[j].st; else { bound = items[j].en; last = j + 1; } }
+    const n = last - i, share = Math.max(0, bound - st) / n;
+    for (let k = 0; k < n; k++){
+      const s0 = Math.round(st + share*k), e0 = k === n - 1 ? Math.max(s0, bound) : Math.round(st + share*(k+1));
+      blocks.push({ x: items[i+k], st: s0, en: e0 });
+    }
+    cur = Math.max(st, bound); i = last;
   }
+  const own = blocks.find(b => /^clean[\s-]?up$/i.test(norm(b.x.r.Block)));      // a row called Cleanup restyles the auto block
+  let list = blocks.filter(b => b !== own).map((b, k) => ({
+      name: norm(b.x.r.Block), details: norm(b.x.r.Details), color: cssColor(b.x.r.Color) || TL_PALETTE[b.x.i % TL_PALETTE.length],
+      st: Math.max(c._st, b.st), en: Math.min(b.en, cs) }))
+    .filter(b => b.en > b.st);
+  if (cu > 0) list.push({ name: own ? norm(own.x.r.Block) : 'Cleanup', details: own ? norm(own.x.r.Details) : '',
+                          color: (own && cssColor(own.x.r.Color)) || '#3DDC84', st: cs, en: c._en, auto: true });
   // fill holes so the bar always spans the whole class
   const out = []; let at = c._st;
   for (const b of list.sort((a,b) => a.st - b.st)){
@@ -664,7 +685,7 @@ function planHtml(plan){
 }
 let tlPlan = null;
 function renderTimeline(c, t, phase){
-  tlPlan = c && isOn(c['Show Timeline']) && !document.querySelector('.panel.plan') ? timelinePlan(c, t) : null;
+  tlPlan = c && lower(c['Show Timeline']) === 'true' && !document.querySelector('.panel.plan') ? timelinePlan(c, t) : null;
   document.body.classList.toggle('hastl', !!tlPlan);
   if (!tlPlan){ $('#tl').innerHTML = ''; document.documentElement.style.setProperty('--tlH', '0px'); return; }
   $('#tl').innerHTML = `<div class="tlhead"><span class="tlnow"></span><span class="tlnext"></span></div><div class="tlbar">` +
@@ -705,7 +726,7 @@ function updateTimeline(){
   if (root.getPropertyValue('--tlH') !== h){ root.setProperty('--tlH', h); requestAnimationFrame(() => { placeCorner(); setupScrollers(); }); }
 }
 /* ---- pages ---- Classes → Page 2: which panels move to a second page (Class Plan, Due Dates, Safety Rules, Tasks) */
-let PAGE = 1, pageClass = '';
+let PAGE = 1, pageClass = '', pagesAvail = false;
 function page2Set(c){
   const s = new Set();
   lower(c && c['Page 2']).split(/[,;\n]+/).map(x => x.trim()).filter(Boolean).forEach(x => {
@@ -720,6 +741,7 @@ function setPage(n){ if (n === PAGE) return; PAGE = n; currentView = ''; render(
 $('#pages').addEventListener('click', e => { const b = e.target.closest('button[data-page]'); if (b) setPage(+b.dataset.page); });
 document.addEventListener('keydown', e => {
   if (isTyping() || !document.body.classList.contains('haspages')) return;
+  if (e.target.closest && e.target.closest('input, select, textarea, #pv')) return;   // preview controls use the arrow keys
   if (['ArrowRight','ArrowLeft','PageDown','PageUp'].includes(e.key)) setPage(PAGE === 1 ? 2 : 1);
 });
 /* ---- cleanup color coding ----
@@ -837,15 +859,16 @@ function render(){
   const phase = !c ? 'idle' : mins < c._st ? 'pre' : (cleanupMin > 0 && mins >= c._en - cleanupMin && mins < c._en) ? 'cleanup' : 'in';
   const ck = c ? `${c.Class}:${ymd(t)}` : '';
   if (ck !== pageClass){ pageClass = ck; PAGE = 1; }          // a new class always opens on the main page
-  const hasP2 = !!c && phase !== 'cleanup' && page2Set(c).size > 0;
-  if (!hasP2) PAGE = 1;
+  if (!c || phase === 'cleanup') PAGE = 1;
   const key = c ? `class:${c.Class}:${ymd(t)}:${phase}:p${PAGE}` : `idle:${ymd(t)}:${t.getHours()}:${t.getMinutes()}`;
   if (key === currentView) return;
   currentView = key;
   liRows = [];
   document.body.classList.remove('cleanup');
+  pagesAvail = false;
   if (phase === 'cleanup') renderCleanup(c, t); else if (c) renderClass(c, t); else renderIdle(t);
-  document.body.classList.toggle('haspages', hasP2);
+  if (!pagesAvail && PAGE !== 1){ PAGE = 1; currentView = ''; return render(); }
+  document.body.classList.toggle('haspages', pagesAvail);
   document.querySelectorAll('#pages button').forEach(b => b.classList.toggle('on', +b.dataset.page === PAGE));
   renderTimeline(c, t, phase); updateTimeline();
   if (phase === 'cleanup') updateCountdown();
@@ -935,16 +958,21 @@ function pvApply(){
   const c = pvClasses().find(r => lower(r.Class) === lower(PV.cls));
   const v = PV.view;
   $('#pvView').value = v;
-  $('#pvClass').disabled = (v === 'idle' || v === 'time');
+  $('#pvClass').disabled = (v === 'idle');
   $('#pvTimeWrap').style.display = v === 'time' ? '' : 'none';
   let d = PV.date ? parseDate(PV.date) : null;
-  if (!d) d = (c && v !== 'idle' && v !== 'time') ? pvNextMeet(c) : new Date(new Date().setHours(0,0,0,0));
+  if (!d) d = (c && v !== 'idle') ? pvNextMeet(c) : new Date(new Date().setHours(0,0,0,0));
   $('#pvDate').value = ymd(d);
   $('#pvTime').value = PV.time || $('#pvTime').value || '15:00';
-  FORCE_CLASS = null; FORCE_IDLE = false;
+  FORCE_CLASS = null; FORCE_IDLE = false; PREFER_CLASS = null;
   let m = 12*60;                                   // minutes after midnight to pretend it is
   if (v === 'idle') FORCE_IDLE = true;
-  else if (v === 'time'){ const [h, mi] = ($('#pvTime').value || '15:00').split(':').map(Number); m = h*60 + mi; }
+  else if (v === 'time'){
+    const [h, mi] = ($('#pvTime').value || '15:00').split(':').map(Number); m = h*60 + mi;
+    // exact time + a chosen class: show that class if the time falls inside it, otherwise whatever the schedule says
+    const st = c && parseTime(c['Start Time']), en = c && parseTime(c['End Time']);
+    if (c) PREFER_CLASS = c.Class;
+  }
   else if (c){
     FORCE_CLASS = c.Class;
     const st = parseTime(c['Start Time']) ?? 15*60, en = parseTime(c['End Time']) ?? st + 60;
@@ -957,11 +985,16 @@ function pvApply(){
   bootTime = Date.now();
   const u = new URLSearchParams(location.search);
   u.set('preview', '1'); u.delete('now');
-  if (FORCE_CLASS) u.set('class', FORCE_CLASS); else u.delete('class');
+  if (PV.cls && v !== 'idle') u.set('class', PV.cls); else u.delete('class');
   u.set('view', v); if (PV.date) u.set('date', PV.date); else u.delete('date');
   if (v === 'time') u.set('time', $('#pvTime').value); else u.delete('time');
   history.replaceState(null, '', '?' + u.toString());
-  currentView = ''; tick();
+  currentView = ''; tick(); pvReserve();
+}
+// keep the preview bar from covering the bottom of the screen (timeline strip, list bottoms)
+function pvReserve(){
+  const h = PREVIEW ? ($('#pv').offsetHeight + 24) + 'px' : '0px', root = document.documentElement.style;
+  if (root.getPropertyValue('--pvH') !== h){ root.setProperty('--pvH', h); requestAnimationFrame(() => { placeCorner(); setupScrollers(); }); }
 }
 if (PREVIEW){
   document.body.classList.add('preview');
@@ -970,8 +1003,9 @@ if (PREVIEW){
   $('#pvDate').addEventListener('change', e => { PV.date = e.target.value; pvApply(); });
   $('#pvTime').addEventListener('change', e => { PV.time = e.target.value; pvApply(); });
   $('#pvExit').addEventListener('click', () => { const u = new URLSearchParams(location.search); ['preview','class','view','date','time','now'].forEach(k => u.delete(k)); location.search = u.toString(); });
-  $('#pvToggle').addEventListener('click', e => { const bar = $('#pv'); bar.classList.toggle('min'); e.target.textContent = bar.classList.contains('min') ? '+' : '–'; });
-  setInterval(() => { if (data) pvFill(); }, 1000);
+  $('#pvToggle').addEventListener('click', e => { const bar = $('#pv'); bar.classList.toggle('min'); e.target.textContent = bar.classList.contains('min') ? '+' : '–'; pvReserve(); });
+  window.addEventListener('resize', pvReserve);
+  setInterval(() => { if (data) pvFill(); pvReserve(); }, 1000);
 }
 
 /* ---------------- clock / status / loops ---------------- */
@@ -1006,7 +1040,7 @@ function demoData(){
   return {
     Settings: [{Setting:'Display Title',Value:'Construction Shop'},{Setting:'Subtitle',Value:'Marin CTE Center · Terra Linda High School'},{Setting:'Minutes Before Class',Value:'2'},{Setting:'Refresh Every (seconds)',Value:'60'},{Setting:'Due Dates To Show',Value:'8'},{Setting:'Text Size (%)',Value:'100'}].map(row),
     Classes: [{Class:'BCT A',Days:'Wed',"Start Time":'3:00 PM',"End Time":'7:00 PM',Room:'Shop',Teacher:'Mr. Dixon',Color:'#F5A524',Active:true,"Show Due Dates":false,"Show Timeline":true,"Page 2":'Class Plan'},
-              {Class:'Demo Class',Days:todayDow,"Start Time":'8:00 AM',"End Time":'9:30 AM',Color:'#4DA3FF',Active:true}].map(row),
+              {Class:'Demo Class',Days:todayDow,"Start Time":'8:00 AM',"End Time":'9:30 AM',Color:'#4DA3FF',Active:true,"Show Timeline":true}].map(row),
     'Due Dates': [{Class:'BCT A',Assignment:'Tape measure quiz',"Due Date":d(0),Details:'In class, 4:00',Show:true},{Class:'BCT A',Assignment:'Cut list worksheet',"Due Date":d(2),Details:'Turn in on paper',Show:true},
                   {Class:'BCT A',Assignment:'Sawhorse project',"Due Date":d(14),Details:'Both horses, sanded',Show:true},{Class:'Demo Class',Assignment:'Other class item',"Due Date":d(1),Show:true},
                   {Class:'All',Assignment:'Safety contract signed',"Due Date":d(7),Details:'Parent signature required',Show:true}].map(row),
@@ -1039,7 +1073,8 @@ function demoData(){
                {Class:'BCT A',Start:'3:15 PM',End:'3:45 PM',Block:'Demo: cutting sawhorse legs',Details:'Watch, then ask questions',Show:true},
                {Class:'BCT A',Start:'3:45 PM',End:'5:00 PM',Block:'Shop work',Details:'Measure, mark and cut your legs',Show:true},
                {Class:'BCT A',Start:'5:00 PM',End:'5:15 PM',Block:'Break',Color:'#9AA3B2',Show:true},
-               {Class:'BCT A',Start:'5:15 PM',Block:'Shop work',Details:'Assemble and check for square',Color:'#60A5FA',Show:true}].map(row),
+               {Class:'BCT A',Start:'5:15 PM',Block:'Shop work',Details:'Assemble and check for square',Color:'#60A5FA',Show:true},
+               {Class:'Demo Class',Start:'8:00 AM',End:'8:10 AM',Block:'Warm-up',Show:true},{Class:'Demo Class',Block:'Lesson',Show:true},{Class:'Demo Class',Block:'Practice',Show:true}].map(row),
     'Shop Info': [{Section:'Shop Rules',Item:'Safety glasses on before you walk past the yellow line',Order:1,Show:true},{Section:'Shop Rules',Item:'No one in the shop without an instructor present',Order:2,Show:true},
                   {Section:'Shop Rules',Item:'Report damaged tools or cords — don’t use them',Order:3,Show:true},{Section:'Announcements',Item:'Field trip permission slips due Friday',Order:4,Show:true},
                   {Section:'Announcements',Item:'Shop closed for cleaning next Monday',Order:5,Show:true}].map(row),
