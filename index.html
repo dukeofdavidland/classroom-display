@@ -176,8 +176,8 @@
    Tabs: Settings, Classes, Due Dates, Safety Rules, Tasks, Shop Info
    ===================================================================== */
 const DEFAULT_SHEET = '1lImz8bQA8o9Haed0Feztu4o-EjxhuPV2n6Q_vtsj_ds';
-const TABS = ['Settings','Classes','Due Dates','Safety Rules','Tasks','Shop Info','Cleanup','Groups'];
-const OPTIONAL_TABS = new Set(['Cleanup','Groups']);   // older copies of the sheet may not have these
+const TABS = ['Settings','Classes','Due Dates','Safety Rules','Tasks','Shop Info','Cleanup','Groups','Rotation'];
+const OPTIONAL_TABS = new Set(['Cleanup','Groups','Rotation']);   // older copies of the sheet may not have these
 const qs = new URLSearchParams(location.search);
 const SHEET_ID = qs.get('sheet') || DEFAULT_SHEET;
 const DEMO = qs.get('demo') === '1';
@@ -365,7 +365,7 @@ function groupSections(rows, textKey, checkTab, secMeta){
   let html = '';
   for (const [sec, items] of map){
     const meta = secMeta ? secMeta(sec) : null;   // {color, label} when this section belongs to a group
-    html += (meta ? `<div class="section gsec" style="--accent:${esc(meta.color)}"><h3>${esc(sec)}<span class="gtag">${esc(meta.label)}</span></h3>`
+    html += (meta ? `<div class="section gsec" style="--accent:${esc(meta.color)}"><h3>${esc(sec)}${meta.label ? `<span class="gtag">${esc(meta.label)}</span>` : ''}</h3>`
                   : `<div class="section">${sec ? `<h3>${esc(sec)}</h3>` : ''}`) + `<ul>` +
       items.map(r => {
         if (!checkTab) return `<li><span class="bullet"></span><span class="txt">${esc(r[textKey])}</span></li>`;
@@ -537,43 +537,73 @@ function renderClass(c, t){
   $('#title').textContent = c.Class;
   $('#sub').textContent = [`${fmtTime(c._st)} – ${fmtTime(c._en)}`, norm(c.Room), norm(c.Teacher)].filter(Boolean).join('  ·  ');
 }
-/* ---- group colors: Groups → Color (any color name or hex); blank → a high-contrast default ---- */
+/* ---- cleanup color coding ----
+   Each cleanup job (a Section on the Cleanup tab) can carry a Color (Cleanup → Color, any row in that section).
+   Which crew has which job comes from the Rotation tab for today's date (Class | Date | Group | Job),
+   falling back to Groups → Assigned To. A crew's card takes its job's color, so crew and tasks match.
+   Groups → Color is only used when a crew's job has no color of its own; blank → a high-contrast default. */
 const GROUP_PALETTE = ['#4ea8ff','#ff8a3d','#c084fc','#ff5fa2','#2dd4bf','#facc15','#f87171','#a3e635'];
-function groupColor(g, i){
-  let v = norm(g.Color);
+function cssColor(v){
+  v = norm(v);
   if (/^[0-9a-f]{3}([0-9a-f]{3})?$/i.test(v)) v = '#' + v;
-  if (v && window.CSS && CSS.supports('color', v)) return v;
-  return GROUP_PALETTE[i % GROUP_PALETTE.length];
+  return (v && window.CSS && CSS.supports('color', v)) ? v : '';
 }
-// "Tools & shadow board" -> ['tools','shadow board']; a cleanup Section matches a group when it names one of these areas
+const groupColor = (g, i) => cssColor(g.Color) || GROUP_PALETTE[i % GROUP_PALETTE.length];
+// "Tools & shadow board" -> ['tools','shadow board']
 const areaParts = s => lower(s).split(/\s*(?:,|&|\/|\+|;|\band\b)\s*/).map(x => x.trim()).filter(Boolean);
-function sectionGroupMeta(groups){
-  const cache = new Map();
-  return sec => {
-    const s = lower(sec); if (!s) return null;
-    if (cache.has(s)) return cache.get(s);
-    let hit = null;
-    groups.forEach((g, i) => {
-      if (hit) return;
-      const parts = areaParts(g['Assigned To']);
-      if (parts.some(p => p === s || p.includes(s) || (p.length >= 3 && s.includes(p)))) hit = {color: groupColor(g, i), label: norm(g.Group) || `Group ${i+1}`};
-    });
-    cache.set(s, hit); return hit;
+function jobMatches(job, sec){        // job "1", "Floor Sweep" or "1 · Floor Sweep" vs section "1 · Floor Sweep"
+  const s = lower(sec); if (!s || !norm(job)) return false;
+  return areaParts(job).some(p => /^\d+$/.test(p) ? new RegExp('^#?' + p + '(?!\\d)').test(s)
+                                                 : (p === s || p.includes(s) || (p.length >= 3 && s.includes(p))));
+}
+function sameGroup(a, b){ a = lower(a); b = lower(b); return !!a && (a === b || a.split(/\s+/).pop() === b.split(/\s+/).pop()); }
+function cleanupPlan(list, groups, cls, t){
+  const secColor = new Map();          // section -> color from the Cleanup tab
+  list.forEach(r => { const s = norm(r.Section), col = cssColor(r.Color); if (s && col && !secColor.has(lower(s))) secColor.set(lower(s), col); });
+  // Rotation tab: one row per crew, one column per class date (header = the date), cell = job number.
+  // (A long format with Date + Job columns also works.)
+  const today = ymd(t);
+  const rotRows = (data.Rotation || []).filter(r => norm(r.Group) && isOn(r.Show) && (!norm(r.Class) || classMatch(r, cls)));
+  const rotJob = g => {
+    for (const r of rotRows){
+      if (!sameGroup(r.Group, g.Group)) continue;
+      if (norm(r.Job)){ const d = parseDate(r.Date); if (d && ymd(d) === today) return norm(r.Job); continue; }
+      for (const k of Object.keys(r)){
+        if (!/\d/.test(k)) continue;
+        const d = parseDate(k); if (d && ymd(d) === today && norm(r[k])) return norm(r[k]);
+      }
+    }
+    return '';
   };
+  const sections = [...new Set(list.map(r => norm(r.Section)).filter(Boolean))];
+  const crews = groups.map((g, i) => {
+    const r = rotJob(g);
+    const job = r || norm(g['Assigned To']);
+    const secs = sections.filter(s => jobMatches(job, s));
+    const color = (secs.length && secColor.get(lower(secs[0]))) || groupColor(g, i);
+    return { g, job, secs, color, label: norm(g.Group) || `Group ${i+1}`, jobText: r && secs.length ? secs.join(' + ') : job };
+  });
+  const meta = sec => {
+    const crew = crews.find(c => c.secs.some(s => lower(s) === lower(sec)));
+    const color = secColor.get(lower(sec)) || (crew && crew.color);
+    return color ? { color, label: crew ? crew.label : '' } : null;
+  };
+  return { crews, meta };
 }
 function renderCleanup(c, t){
   const list = (data.Cleanup||[]).filter(r => norm(r.Task) && isOn(r.Show) && classMatch(r,c.Class))
     .filter(r => { const d = parseDate(r.Date); return !d || ymd(d) === ymd(t); });
   const groups = (data.Groups||[]).filter(r => (norm(r.Group) || norm(r.Members)) && isOn(r.Show) && classMatch(r,c.Class)).sort(sortOrder);
-  const groupsHtml = groups.length ? `<div class="groups">` + groups.map((g, i) => `
-      <div class="group" style="--accent:${esc(groupColor(g, i))}">
+  const plan = cleanupPlan(list, groups, c.Class, t);
+  const groupsHtml = groups.length ? `<div class="groups">` + plan.crews.map(({g, color, jobText}) => `
+      <div class="group" style="--accent:${esc(color)}">
         <div class="gname">${esc(norm(g.Group) || 'Group')}</div>
-        ${norm(g['Assigned To']) ? `<div class="gjob">${esc(g['Assigned To'])}</div>` : ''}
+        ${jobText ? `<div class="gjob">${esc(jobText)}</div>` : ''}
         <div class="gmembers">${esc(g.Members)}</div>
       </div>`).join('') + `</div>` : '';
   $('#grid').className = 'cleanup';
   $('#grid').innerHTML =
-    panel('Cleanup Checklist', checkBody(list, 'cleanup', c.Class, sectionGroupMeta(groups)), '', 'check', addRow('cleanup', c.Class)) +
+    panel('Cleanup Checklist', checkBody(list, 'cleanup', c.Class, plan.meta), '', 'check', addRow('cleanup', c.Class)) +
     panel('Groups', groupsHtml, groups.length || null);
   document.body.classList.remove('idle');
   document.body.classList.add('cleanup');
@@ -766,13 +796,24 @@ function demoData(){
     Tasks: [{Class:'BCT A',Date:'',Section:'Start of Class',Task:'Sign in and grab your safety glasses',Order:1,Show:true,Done:true,'Done On':'10/1/2026'},{Class:'BCT A',Date:d(0),Section:'Main Work',Task:'Measure and mark sawhorse legs',Order:2,Show:true},
             {Class:'BCT A',Date:d(0),Section:'Main Work',Task:'Tape measure quiz at 4:00',Order:3,Show:true},{Class:'BCT A',Date:d(1),Section:'Main Work',Task:'THIS IS TOMORROW — should not show',Order:4,Show:true},
             {Class:'BCT A',Date:'',Section:'End of Class',Task:'Cleanup starts 15 minutes before the end of class',Order:9,Show:true},{Class:'BCT A',Date:'',Section:'End of Class',Task:'Hidden row test',Order:10,Show:false}].map(row),
-    Cleanup: [{Class:'All',Section:'Tools',Task:'Unplug and return every power tool to its labeled spot',Order:1,Show:true},{Class:'All',Section:'Tools',Task:'Hand tools back on the shadow board — check for empty outlines',Order:2,Show:true},
-              {Class:'All',Section:'Benches',Task:'Clear your bench: scrap to the scrap bin, usable cutoffs to the rack',Order:3,Show:true},{Class:'All',Section:'Benches',Task:'Wipe down bench tops; clamps back in the clamp rack',Order:4,Show:true},
-              {Class:'All',Section:'Floor',Task:'Sweep your area, then the walkways',Order:5,Show:true},{Class:'All',Section:'Floor',Task:'Shop vac the table saw and miter saw stations',Order:6,Show:true},
-              {Class:'BCT A',Section:'Today',Task:'Stack sawhorse parts by group number on the back table',Order:7,Show:true},{Class:'BCT A',Section:'Added on screen',Task:'Sheet-echoed write-in',Order:0,Show:true,Source:'screen:demo1'},{Class:'All',Section:'Sign-out',Task:'Safety glasses back in the bin; instructor checks your zone before you leave',Order:9,Show:true}].map(row),
-    Groups: [{Class:'BCT A',Group:'Group 1',Members:'Alex, Jordan, Sam',"Assigned To":'Tools & shadow board',Show:true},{Class:'BCT A',Group:'Group 2',Members:'Taylor, Casey, Riley',"Assigned To":'Benches & clamps',Show:true},
-             {Class:'BCT A',Group:'Group 3',Members:'Morgan, Drew, Jamie',"Assigned To":'Floor & walkways',Show:true},{Class:'BCT A',Group:'Group 4',Members:'Quinn, Avery',"Assigned To":'Saw stations & shop vac',Color:'red',Show:true},
+    Cleanup: [
+      ...[['Put away every tool you used',1],['Your scraps in the bin, your sawdust swept',2],['Your PPE put away',3],['QC Inspector checks every spot before Step 2',4]]
+        .map(([Task,Order]) => ({Class:'BCT A',Section:'Step 1 · Clean your own first',Task,Order,Show:true})),
+      ...[['1 · Floor Sweep','#FB923C',['Sawdust swept from work area and under benches','Magnet sweep for dropped nails','Dustpan emptied in the trash']],
+          ['2 · Tool Return','#60A5FA',['Every tool back in its spot and counted','Cords coiled, batteries on chargers','Pencils, tapes and squares returned']],
+          ['3 · Lumber & Scrap','#4ADE80',['Usable stock back on the rack','Offcuts in the scrap bin','Nails and screws back in their bins']],
+          ['4 · Benches & PPE','#FACC15',['Benches cleared and wiped down','Sawhorses stacked','Safety glasses and ear protection put away']]]
+        .flatMap(([Section,Color,tasks],j) => tasks.map((Task,i) => ({Class:'BCT A',Section,Task,Order:(j+1)*10+i+1,Show:true,Color:i?'':Color}))),
+      {Class:'BCT A',Section:'Added on screen',Task:'Sheet-echoed write-in',Order:0,Show:true,Source:'screen:demo1'}].map(row),
+    Groups: [{Class:'BCT A',Group:'Crew A',Members:'Alex, Jordan, Sam',Show:true},{Class:'BCT A',Group:'Crew B',Members:'Taylor, Casey, Riley',Show:true},
+             {Class:'BCT A',Group:'Crew C',Members:'Morgan, Drew, Jamie',Show:true},{Class:'BCT A',Group:'Crew D',Members:'Quinn, Avery',Show:true},
              {Class:'Demo Class',Group:'Other class',Members:'should not show',Show:true}].map(row),
+    // rotation grid: one column per day for the next 6 weeks, jobs shift by one each day
+    Rotation: ['Crew A','Crew B','Crew C','Crew D'].map((Group, ci) => {
+      const r = {Group, Class:'BCT A'}; const t0 = new Date();
+      for (let d = 0; d < 42; d++){ const x = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate()+d); r[`${x.getMonth()+1}/${x.getDate()}/${x.getFullYear()}`] = (ci + d) % 4 + 1; }
+      return r;
+    }).map(row),
     'Shop Info': [{Section:'Shop Rules',Item:'Safety glasses on before you walk past the yellow line',Order:1,Show:true},{Section:'Shop Rules',Item:'No one in the shop without an instructor present',Order:2,Show:true},
                   {Section:'Shop Rules',Item:'Report damaged tools or cords — don’t use them',Order:3,Show:true},{Section:'Announcements',Item:'Field trip permission slips due Friday',Order:4,Show:true},
                   {Section:'Announcements',Item:'Shop closed for cleaning next Monday',Order:5,Show:true}].map(row),
