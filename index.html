@@ -104,6 +104,19 @@
   body.setup #hdr,body.setup #grid,body.setup #hero{display:none}
   /* layout for 3-panel class mode: fill height */
   body:not(.idle) #grid{height:calc(100vh - var(--hdrH,0px) - var(--cdH,0px))}
+  /* preview / design mode (?preview=1) — never shown on the TV unless the URL asks for it */
+  #pv{display:none}
+  body.preview{cursor:auto}
+  body.preview #pv{display:flex;position:fixed;left:0;right:0;margin:0 auto;width:max-content;bottom:14px;z-index:50;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;
+    max-width:calc(100vw - 28px);box-sizing:border-box;padding:10px 14px;border-radius:12px;background:#2b1d05;border:2px solid var(--accent);box-shadow:0 8px 30px rgba(0,0,0,.6);
+    font:14px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--text)}
+  #pv .tag{font-weight:800;letter-spacing:.1em;color:var(--accent)}
+  #pv label{display:flex;align-items:center;gap:6px;color:var(--muted)}
+  #pv select,#pv input{font:inherit;color:var(--text);background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:5px 8px}
+  #pv button{font:inherit;cursor:pointer;color:var(--text);background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:5px 10px}
+  #pv button:hover{border-color:var(--accent)}
+  #pv .note{color:var(--muted);font-size:12px}
+  #pv.min > :not(.tag):not(#pvToggle){display:none}
 </style>
 </head>
 <body>
@@ -112,7 +125,7 @@
   <h1>Classroom Display</h1>
   <p id="setupMsg">Waiting for the sheet…</p>
   <p>Open this page as <code>classroom-display.html?sheet=YOUR_SHEET_ID</code>. The Google Sheet must be shared as <b>Anyone with the link → Viewer</b>.</p>
-  <p>Test options: <code>?demo=1</code> (built-in sample data) · <code>&amp;now=2026-10-14T15:05</code> (pretend time) · <code>&amp;class=BCT%20A</code> (force a class)</p>
+  <p>Test options: <code>?preview=1</code> (pick any class and view to see how it looks) · <code>?demo=1</code> (built-in sample data) · <code>&amp;now=2026-10-14T15:05</code> (pretend time) · <code>&amp;class=BCT%20A</code> (force a class)</p>
 </div></div>
 
 <header id="hdr">
@@ -136,6 +149,23 @@
 
 <main id="grid"></main>
 
+<div id="pv" role="region" aria-label="Preview controls">
+  <span class="tag">PREVIEW</span>
+  <label>Class <select id="pvClass"></select></label>
+  <label>Show <select id="pvView">
+    <option value="pre">Just before class</option>
+    <option value="in">During class</option>
+    <option value="cleanup">Cleanup (end of class)</option>
+    <option value="idle">Between classes (Shop Info)</option>
+    <option value="time">Exact date &amp; time</option>
+  </select></label>
+  <label>Date <input type="date" id="pvDate"></label>
+  <label id="pvTimeWrap">Time <input type="time" id="pvTime" value="15:00"></label>
+  <span class="note">Changes here aren't saved to the sheet</span>
+  <button id="pvExit" title="Back to the live screen">Exit</button>
+  <button id="pvToggle" title="Hide or show these controls">–</button>
+</div>
+
 <script>
 /* =====================================================================
    Classroom Display — reads a Google Sheet and shows per-class content
@@ -147,9 +177,11 @@ const OPTIONAL_TABS = new Set(['Cleanup','Groups']);   // older copies of the sh
 const qs = new URLSearchParams(location.search);
 const SHEET_ID = qs.get('sheet') || DEFAULT_SHEET;
 const DEMO = qs.get('demo') === '1';
-const FORCE_CLASS = qs.get('class');
-const FAKE_NOW = qs.get('now') ? new Date(qs.get('now')) : null;
-const bootTime = Date.now();
+const PREVIEW = qs.has('preview') && qs.get('preview') !== '0';   // design mode: pick a class + view, nothing is saved
+let FORCE_CLASS = qs.get('class');
+let FORCE_IDLE = false;
+let FAKE_NOW = qs.get('now') ? new Date(qs.get('now')) : null;
+let bootTime = Date.now();
 
 const $ = s => document.querySelector(s);
 const now = () => FAKE_NOW ? new Date(FAKE_NOW.getTime() + (Date.now() - bootTime)) : new Date();
@@ -287,6 +319,7 @@ async function loadAll(){
 
 /* ---------------- schedule ---------------- */
 function classesNow(t){
+  if (FORCE_IDLE) return [];
   const before = +setting('Minutes Before Class', 2) || 0;
   const after  = +setting('Minutes After Class', 0) || 0;
   const mins = t.getHours()*60 + t.getMinutes() + t.getSeconds()/60;
@@ -345,7 +378,7 @@ function groupSections(rows, textKey, checkTab){
    Without one, changes live in this browser for today only.
    ===================================================================== */
 const WB = () => norm(setting('Write-back URL', ''));
-const lsKey = n => `cd:${n}:${SHEET_ID}:${ymd(now())}`;
+const lsKey = n => `${PREVIEW ? 'cdp' : 'cd'}:${n}:${SHEET_ID}:${ymd(now())}`;   // preview keeps its own scratch state
 function lsGet(n, dflt){ try { return JSON.parse(localStorage.getItem(lsKey(n))) ?? dflt; } catch(e){ return dflt; } }
 function lsSet(n, v){ try { localStorage.setItem(lsKey(n), JSON.stringify(v)); } catch(e){} }
 const localAdded = () => lsGet('added', []);          // [{id, tab, cls, text}] not yet seen back from the sheet
@@ -358,13 +391,13 @@ const saveLocalRemoved = a => lsSet('removed', a);
 /* --- posting to the sheet, with a retry queue for when the network blips --- */
 let saveState = '';
 async function post(payload){
-  if (!WB()) return;
+  if (PREVIEW || !WB()) return;   // preview never writes to the sheet
   const q = lsGet('queue', []); q.push(payload); lsSet('queue', q);
   flushQueue();
 }
 let flushing = false;
 async function flushQueue(){
-  if (flushing || !WB()) return; flushing = true;
+  if (PREVIEW || flushing || !WB()) return; flushing = true;
   try{
     let q = lsGet('queue', []);
     while (q.length){
@@ -598,6 +631,70 @@ function tickScroll(ts){
   requestAnimationFrame(tickScroll);
 }
 requestAnimationFrame(tickScroll);
+
+/* ---------------- preview / design mode (?preview=1) ----------------
+   Lets a teacher see any class in any phase while setting up content.
+   Settings live in the URL (preview=1&class=…&view=…&date=…&time=…) so a reload keeps them. */
+const PV = { cls: qs.get('class') || '', view: qs.get('view') || 'in', date: qs.get('date') || '', time: qs.get('time') || '' };
+let pvSig = '';
+function pvClasses(){ return (data && data.Classes || []).filter(c => norm(c.Class)); }
+function pvNextMeet(c){   // next day this class meets, today included; falls back to today
+  const t = new Date();
+  for (let add = 0; add < 21; add++){ const d = new Date(t.getFullYear(), t.getMonth(), t.getDate()+add); if (meetsOn(c, d)) return d; }
+  return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+}
+function pvFill(){
+  const list = pvClasses();
+  const sig = list.map(c => c.Class + (isOn(c.Active) ? '' : '~')).join('|');
+  if (sig === pvSig) return; pvSig = sig;
+  const sel = $('#pvClass');
+  sel.innerHTML = list.length ? list.map(c => `<option value="${esc(c.Class)}">${esc(c.Class)}${isOn(c.Active) ? '' : ' (inactive)'}</option>`).join('') : '<option value="">(no classes in the sheet)</option>';
+  if (!PV.cls || !list.some(c => lower(c.Class) === lower(PV.cls))) PV.cls = list[0] ? list[0].Class : '';
+  sel.value = list.find(c => lower(c.Class) === lower(PV.cls))?.Class ?? '';
+  pvApply();
+}
+function pvApply(){
+  const c = pvClasses().find(r => lower(r.Class) === lower(PV.cls));
+  const v = PV.view;
+  $('#pvView').value = v;
+  $('#pvClass').disabled = (v === 'idle' || v === 'time');
+  $('#pvTimeWrap').style.display = v === 'time' ? '' : 'none';
+  let d = PV.date ? parseDate(PV.date) : null;
+  if (!d) d = (c && v !== 'idle' && v !== 'time') ? pvNextMeet(c) : new Date(new Date().setHours(0,0,0,0));
+  $('#pvDate').value = ymd(d);
+  $('#pvTime').value = PV.time || $('#pvTime').value || '15:00';
+  FORCE_CLASS = null; FORCE_IDLE = false;
+  let m = 12*60;                                   // minutes after midnight to pretend it is
+  if (v === 'idle') FORCE_IDLE = true;
+  else if (v === 'time'){ const [h, mi] = ($('#pvTime').value || '15:00').split(':').map(Number); m = h*60 + mi; }
+  else if (c){
+    FORCE_CLASS = c.Class;
+    const st = parseTime(c['Start Time']) ?? 15*60, en = parseTime(c['End Time']) ?? st + 60;
+    const cu = +norm(c['Cleanup Minutes']) || +setting('Cleanup Minutes Before End', 30) || 0;
+    if (v === 'pre') m = st - 1;
+    else if (v === 'cleanup') m = cu > 0 ? en - cu + 1 : en - 1;
+    else m = Math.max(st + 1, Math.min(st + 5, en - cu - 1));
+  }
+  FAKE_NOW = new Date(d.getFullYear(), d.getMonth(), d.getDate(), Math.floor(m/60), Math.round(m % 60));
+  bootTime = Date.now();
+  const u = new URLSearchParams(location.search);
+  u.set('preview', '1'); u.delete('now');
+  if (FORCE_CLASS) u.set('class', FORCE_CLASS); else u.delete('class');
+  u.set('view', v); if (PV.date) u.set('date', PV.date); else u.delete('date');
+  if (v === 'time') u.set('time', $('#pvTime').value); else u.delete('time');
+  history.replaceState(null, '', '?' + u.toString());
+  currentView = ''; tick();
+}
+if (PREVIEW){
+  document.body.classList.add('preview');
+  $('#pvClass').addEventListener('change', e => { PV.cls = e.target.value; PV.date = ''; pvApply(); });
+  $('#pvView').addEventListener('change', e => { PV.view = e.target.value; pvApply(); });
+  $('#pvDate').addEventListener('change', e => { PV.date = e.target.value; pvApply(); });
+  $('#pvTime').addEventListener('change', e => { PV.time = e.target.value; pvApply(); });
+  $('#pvExit').addEventListener('click', () => { const u = new URLSearchParams(location.search); ['preview','class','view','date','time','now'].forEach(k => u.delete(k)); location.search = u.toString(); });
+  $('#pvToggle').addEventListener('click', e => { const bar = $('#pv'); bar.classList.toggle('min'); e.target.textContent = bar.classList.contains('min') ? '+' : '–'; });
+  setInterval(() => { if (data) pvFill(); }, 1000);
+}
 
 /* ---------------- clock / status / loops ---------------- */
 function updateStatus(){
