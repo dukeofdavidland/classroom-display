@@ -82,7 +82,11 @@
   .check li .bullet{width:.95em;height:.95em;border-radius:5px;background:transparent;border:2px solid var(--accent);margin-top:.25em}
   body:not(.cleanup) .check li{padding:.38em 0;font-size:1.05em}
   .groups{display:grid;grid-template-columns:repeat(2,1fr);gap:.5em;padding-top:.2em}
-  .group{background:var(--panel-2);border:1px solid var(--line);border-left:6px solid var(--accent);border-radius:14px;padding:.45em .7em}
+  .group{background:var(--panel-2);border:1px solid var(--line);border-left:.45em solid var(--accent);border-radius:14px;padding:.45em .7em}
+  /* group color coding: a cleanup section whose name matches a group's Assigned To takes that group's color */
+  .section.gsec{border-left:.3em solid var(--accent);padding-left:.55em;margin-left:-.1em}
+  .section.gsec h3{color:var(--accent)}
+  .section.gsec h3 .gtag{display:inline-block;margin-left:.6em;padding:.05em .55em;border-radius:999px;background:var(--accent);color:#0f1115;letter-spacing:.06em}
   .group .gname{font-size:1.15em;font-weight:800;line-height:1.1}
   .group .gjob{color:var(--accent);font-weight:700;margin-top:.1em;font-size:.95em;line-height:1.2}
   .group .gmembers{color:var(--text);opacity:.9;margin-top:.3em;font-size:.95em;line-height:1.3}
@@ -355,12 +359,14 @@ function nextClass(t){ // next upcoming (within 14 days)
 
 /* ---------------- rendering ---------------- */
 let liRows = [];
-function groupSections(rows, textKey, checkTab){
+function groupSections(rows, textKey, checkTab, secMeta){
   const map = new Map();
   rows.sort(sortOrder).forEach(r => { const sec = norm(r.Section) || ''; if (!map.has(sec)) map.set(sec, []); map.get(sec).push(r); });
   let html = '';
   for (const [sec, items] of map){
-    html += `<div class="section">${sec ? `<h3>${esc(sec)}</h3>` : ''}<ul>` +
+    const meta = secMeta ? secMeta(sec) : null;   // {color, label} when this section belongs to a group
+    html += (meta ? `<div class="section gsec" style="--accent:${esc(meta.color)}"><h3>${esc(sec)}<span class="gtag">${esc(meta.label)}</span></h3>`
+                  : `<div class="section">${sec ? `<h3>${esc(sec)}</h3>` : ''}`) + `<ul>` +
       items.map(r => {
         if (!checkTab) return `<li><span class="bullet"></span><span class="txt">${esc(r[textKey])}</span></li>`;
         const key = doneKey(checkTab, r);
@@ -413,7 +419,7 @@ async function flushQueue(){
 }
 
 /* --- rows the sheet has for a class, plus write-ins the sheet hasn't echoed back yet --- */
-function checkBody(rows, tab, cls){
+function checkBody(rows, tab, cls, secMeta){
   const removed = new Set(localRemoved());
   rows = rows.filter(r => !removed.has(lower(r.Source)));
   const pending = localAdded().filter(a => a.tab === tab && lower(a.cls) === lower(cls) && !rows.some(r => lower(r.Source) === 'screen:'+a.id));
@@ -421,7 +427,7 @@ function checkBody(rows, tab, cls){
   const made = pending.map(a => ({Class: cls, Section: 'Added on screen', Task: a.text, Source: 'screen:'+a.id, Order: 0, _row: -1}));
   const all = made.concat(rows.map(r => (lower(r.Source).startsWith('screen:') && norm(r.Order) === '') ? {...r, Order: 0} : r));
   if (!all.length) return '';
-  return groupSections(all, 'Task', tab);
+  return groupSections(all, 'Task', tab, secMeta);
 }
 const addRow = (tab, cls) => `<div class="addrow" data-tab="${tab}" data-cls="${esc(cls)}"><button class="add-btn">+ Add item</button><input class="add-input" type="text" maxlength="140" placeholder="Type an item, press Enter" hidden></div>`;
 function addItem(tab, cls, text){
@@ -531,19 +537,43 @@ function renderClass(c, t){
   $('#title').textContent = c.Class;
   $('#sub').textContent = [`${fmtTime(c._st)} – ${fmtTime(c._en)}`, norm(c.Room), norm(c.Teacher)].filter(Boolean).join('  ·  ');
 }
+/* ---- group colors: Groups → Color (any color name or hex); blank → a high-contrast default ---- */
+const GROUP_PALETTE = ['#4ea8ff','#ff8a3d','#c084fc','#ff5fa2','#2dd4bf','#facc15','#f87171','#a3e635'];
+function groupColor(g, i){
+  let v = norm(g.Color);
+  if (/^[0-9a-f]{3}([0-9a-f]{3})?$/i.test(v)) v = '#' + v;
+  if (v && window.CSS && CSS.supports('color', v)) return v;
+  return GROUP_PALETTE[i % GROUP_PALETTE.length];
+}
+// "Tools & shadow board" -> ['tools','shadow board']; a cleanup Section matches a group when it names one of these areas
+const areaParts = s => lower(s).split(/\s*(?:,|&|\/|\+|;|\band\b)\s*/).map(x => x.trim()).filter(Boolean);
+function sectionGroupMeta(groups){
+  const cache = new Map();
+  return sec => {
+    const s = lower(sec); if (!s) return null;
+    if (cache.has(s)) return cache.get(s);
+    let hit = null;
+    groups.forEach((g, i) => {
+      if (hit) return;
+      const parts = areaParts(g['Assigned To']);
+      if (parts.some(p => p === s || p.includes(s) || (p.length >= 3 && s.includes(p)))) hit = {color: groupColor(g, i), label: norm(g.Group) || `Group ${i+1}`};
+    });
+    cache.set(s, hit); return hit;
+  };
+}
 function renderCleanup(c, t){
   const list = (data.Cleanup||[]).filter(r => norm(r.Task) && isOn(r.Show) && classMatch(r,c.Class))
     .filter(r => { const d = parseDate(r.Date); return !d || ymd(d) === ymd(t); });
   const groups = (data.Groups||[]).filter(r => (norm(r.Group) || norm(r.Members)) && isOn(r.Show) && classMatch(r,c.Class)).sort(sortOrder);
-  const groupsHtml = groups.length ? `<div class="groups">` + groups.map(g => `
-      <div class="group">
+  const groupsHtml = groups.length ? `<div class="groups">` + groups.map((g, i) => `
+      <div class="group" style="--accent:${esc(groupColor(g, i))}">
         <div class="gname">${esc(norm(g.Group) || 'Group')}</div>
         ${norm(g['Assigned To']) ? `<div class="gjob">${esc(g['Assigned To'])}</div>` : ''}
         <div class="gmembers">${esc(g.Members)}</div>
       </div>`).join('') + `</div>` : '';
   $('#grid').className = 'cleanup';
   $('#grid').innerHTML =
-    panel('Cleanup Checklist', checkBody(list, 'cleanup', c.Class), '', 'check', addRow('cleanup', c.Class)) +
+    panel('Cleanup Checklist', checkBody(list, 'cleanup', c.Class, sectionGroupMeta(groups)), '', 'check', addRow('cleanup', c.Class)) +
     panel('Groups', groupsHtml, groups.length || null);
   document.body.classList.remove('idle');
   document.body.classList.add('cleanup');
@@ -741,7 +771,7 @@ function demoData(){
               {Class:'All',Section:'Floor',Task:'Sweep your area, then the walkways',Order:5,Show:true},{Class:'All',Section:'Floor',Task:'Shop vac the table saw and miter saw stations',Order:6,Show:true},
               {Class:'BCT A',Section:'Today',Task:'Stack sawhorse parts by group number on the back table',Order:7,Show:true},{Class:'BCT A',Section:'Added on screen',Task:'Sheet-echoed write-in',Order:0,Show:true,Source:'screen:demo1'},{Class:'All',Section:'Sign-out',Task:'Safety glasses back in the bin; instructor checks your zone before you leave',Order:9,Show:true}].map(row),
     Groups: [{Class:'BCT A',Group:'Group 1',Members:'Alex, Jordan, Sam',"Assigned To":'Tools & shadow board',Show:true},{Class:'BCT A',Group:'Group 2',Members:'Taylor, Casey, Riley',"Assigned To":'Benches & clamps',Show:true},
-             {Class:'BCT A',Group:'Group 3',Members:'Morgan, Drew, Jamie',"Assigned To":'Floor & walkways',Show:true},{Class:'BCT A',Group:'Group 4',Members:'Quinn, Avery',"Assigned To":'Saw stations & shop vac',Show:true},
+             {Class:'BCT A',Group:'Group 3',Members:'Morgan, Drew, Jamie',"Assigned To":'Floor & walkways',Show:true},{Class:'BCT A',Group:'Group 4',Members:'Quinn, Avery',"Assigned To":'Saw stations & shop vac',Color:'red',Show:true},
              {Class:'Demo Class',Group:'Other class',Members:'should not show',Show:true}].map(row),
     'Shop Info': [{Section:'Shop Rules',Item:'Safety glasses on before you walk past the yellow line',Order:1,Show:true},{Section:'Shop Rules',Item:'No one in the shop without an instructor present',Order:2,Show:true},
                   {Section:'Shop Rules',Item:'Report damaged tools or cords — don’t use them',Order:3,Show:true},{Section:'Announcements',Item:'Field trip permission slips due Friday',Order:4,Show:true},
